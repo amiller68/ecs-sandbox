@@ -1,0 +1,66 @@
+#!/bin/bash
+
+# iac - Infrastructure as Code Management Script
+# Runs terraform commands with 1Password vault secret injection
+
+set -e
+
+# Get the directory where this script is located
+PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}")/.." && pwd )"
+IAC_ROOT="$PROJECT_ROOT/iac"
+
+source "$PROJECT_ROOT/bin/utils"
+source "$PROJECT_ROOT/bin/config"
+source "$PROJECT_ROOT/bin/vault"
+
+# Function to show usage
+usage() {
+    echo -e "${YELLOW}Infrastructure as Code Management${NC}"
+    echo ""
+    echo "Usage: $0 <stage> <terraform-command> [args]"
+    echo ""
+    echo "Where <stage> is one of the following:"
+    echo "  ${STAGES}"
+    echo ""
+    echo "And <terraform-command> is any valid Terraform command"
+    exit 1
+}
+
+# Check arguments
+if [[ $# -lt 2 ]]; then
+    usage
+fi
+
+STAGE="$1"
+
+# Validate stage
+if ! is_in_list "$STAGES" "$STAGE"; then
+    print_error "Unknown stage: $STAGE"
+    echo "Available stages: $STAGES"
+    exit 1
+fi
+
+shift
+
+STAGE_DIR="$IAC_ROOT/envs/$STAGE"
+
+if [ ! -d "$STAGE_DIR" ]; then
+    print_error "Stage directory not found: $STAGE_DIR"
+    exit 1
+fi
+
+# Export common variables for all stages as TF_VAR_ variables
+export TF_VAR_project_name="${PROJECT_NAME}"
+export TF_VAR_services="${SERVICES}"
+export TF_VAR_dns_root_zone="${DNS_ROOT_ZONE}"
+
+# Export subdomains for DNS module
+SUBDOMAINS=$(list_subdomains "$STAGE" | tr ' ' ',')
+export TF_VAR_subdomains="${SUBDOMAINS}"
+
+# Export AWS credentials from vault
+export TF_VAR_aws_access_key_id=$(read_from_vault AWS_ACCESS_KEY_ID)
+export TF_VAR_aws_secret_access_key=$(read_from_vault AWS_SECRET_ACCESS_KEY)
+export TF_VAR_aws_region=$(read_from_vault AWS_REGION)
+
+run_with_vault -- sh -c "export TF_TOKEN_app_terraform_io=\$TF_TOKEN && cd '$STAGE_DIR' && terraform $*"

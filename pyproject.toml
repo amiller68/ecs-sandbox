@@ -1,0 +1,21 @@
+[project]
+name = "ecs-sandbox-root"
+version = "0.1.0"
+description = "Remote sandbox execution environment for AI agents"
+readme = "README.md"
+requires-python = ">=3.12"
+
+[tool.uv.workspace]
+members = ["packages/ecs-sandbox-client", "apps/ecs-sandbox", "apps/ecs-sandbox-agent", "apps/dev-cli"]
+
+[tool.uv.sources]
+ecs-sandbox-client = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.25.3",
+    "black",
+    "ruff",
+    "ty",
+]

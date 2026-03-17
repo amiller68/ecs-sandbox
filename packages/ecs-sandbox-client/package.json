@@ -1,0 +1,13 @@
+{
+  "name": "@ecs-sandbox/ecs-sandbox-client",
+  "private": true,
+  "scripts": {
+    "fmt": "make fmt",
+    "fmt:check": "make fmt-check",
+    "lint": "make lint",
+    "types": "make types",
+    "test": "make test",
+    "check": "make check",
+    "clean": "make clean"
+  }
+}

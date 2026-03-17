@@ -1,0 +1,13 @@
+[project]
+name = "ecs-sandbox-agent"
+version = "0.1.0"
+description = "Sidecar agent that runs inside each sandbox container"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

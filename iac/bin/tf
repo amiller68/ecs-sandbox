@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+
+set -e
+
+# Get the directory where the script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Create backups directory if it doesn't exist
+BACKUPS_DIR="$PROJECT_ROOT/backups/tf"
+mkdir -p "$BACKUPS_DIR"
+
+ENVIRONMENTS=("staging" "production")
+
+# Function to show usage
+usage() {
+  echo "Run a terraform command against one of our supported environments"
+  echo ""
+  echo "Usage: $0 <stage> terraform [args]"
+  echo "   or: $0 ecr [args]           # Manage shared ECR repositories"
+  echo "   or: $0 <stage> move-state <moves-file>"
+  echo ""
+  echo "Supported environments: ${ENVIRONMENTS[*]}"
+  echo ""
+  echo "Examples:"
+  echo "  $0 staging terraform plan"
+  echo "  $0 staging terraform apply"
+  echo "  $0 production terraform plan"
+  echo "  $0 ecr init"
+  echo "  $0 ecr plan"
+  echo "  $0 ecr apply"
+  echo "  $0 staging move-state state-moves.txt"
+  exit 1
+}
+
+# Validate environment
+validate_env() {
+  local env="$1"
+  for valid_env in "${ENVIRONMENTS[@]}"; do
+    if [ "$env" = "$valid_env" ]; then
+      return 0
+    fi
+  done
+  echo "Error: Invalid environment '$env'. Must be one of: ${ENVIRONMENTS[*]}"
+  exit 1
+}
+
+# Function to run terraform commands
+# If 1Password CLI (op) is available, uses it to inject secrets
+run_terraform() {
+  local cmd="$*"
+
+  if command -v op &> /dev/null; then
+    echo "Running terraform in $STAGE environment (via 1Password)..."
+    op run -- terraform $cmd
+  else
+    echo "Running terraform in $STAGE environment..."
+    terraform $cmd
+  fi
+}
+
+# Function for shared ECR terraform commands
+run_shared_ecr_terraform() {
+  local cmd="$*"
+
+  echo "Running ECR terraform command..."
+
+  if command -v op &> /dev/null; then
+    op run -- terraform -chdir="$PROJECT_ROOT/envs/ecr" $cmd
+  else
+    terraform -chdir="$PROJECT_ROOT/envs/ecr" $cmd
+  fi
+}
+
+# Check if this is a direct ECR command
+if [ "$#" -ge 1 ] && [ "$1" = "ecr" ]; then
+  shift
+  run_shared_ecr_terraform "$@"
+  exit 0
+fi
+
+# Otherwise, this is an environment-specific command
+if [ "$#" -lt 2 ]; then
+  usage
+fi
+
+STAGE=$1
+COMMAND=$2
+shift 2
+
+# Validate stage
+validate_env "$STAGE"
+ENV_DIR="$PROJECT_ROOT/envs/$STAGE"
+
+# Store current directory to return to later
+CURRENT_DIR=$(pwd)
+
+cleanup() {
+  cd "$CURRENT_DIR"
+}
+trap cleanup EXIT
+
+# Navigate to environment directory
+echo "Navigating to $ENV_DIR"
+cd "$ENV_DIR"
+
+# Function to create a backup of the current state
+create_state_backup() {
+  local timestamp=$(date +"%Y%m%d_%H%M%S")
+  local backup_file="$BACKUPS_DIR/terraform_${STAGE}_${timestamp}.tfstate"
+
+  echo "Creating state backup at: $backup_file"
+  terraform state pull > "$backup_file"
+  echo "Backup created successfully"
+}
+
+# Function to perform state moves
+perform_state_moves() {
+  local moves_file="$CURRENT_DIR/$1"
+
+  if [ ! -f "$moves_file" ]; then
+    echo "Error: State moves file not found at $moves_file"
+    exit 1
+  fi
+
+  create_state_backup
+
+  echo "Moving terraform state for resources using moves defined in $moves_file..."
+
+  while IFS=, read -r source_addr target_addr || [ -n "$source_addr" ]; do
+    [[ -z "$source_addr" || "$source_addr" =~ ^[[:space:]]*# ]] && continue
+
+    source_addr="${source_addr## }"
+    source_addr="${source_addr%% }"
+    target_addr="${target_addr## }"
+    target_addr="${target_addr%% }"
+
+    echo "Moving: $source_addr -> $target_addr"
+    terraform state mv "$source_addr" "$target_addr" || {
+      echo "Warning: Failed to move $source_addr to $target_addr"
+    }
+  done < "$moves_file"
+}
+
+# Handle commands
+case $COMMAND in
+  terraform)
+    if [ -z "$1" ]; then
+      echo "Error: Please provide a terraform command (init, plan, apply, destroy)"
+      echo "Usage: $0 $STAGE terraform <command> [args]"
+      exit 1
+    fi
+    run_terraform "$@"
+    ;;
+  move-state)
+    if [ -z "$1" ]; then
+      echo "Error: Please provide the path to the state moves file"
+      echo "Usage: $0 $STAGE move-state <path-to-moves-file>"
+      exit 1
+    fi
+    perform_state_moves "$1"
+    ;;
+  *)
+    echo "Error: Unknown command '$COMMAND'"
+    usage
+    ;;
+esac

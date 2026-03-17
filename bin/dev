@@ -1,0 +1,62 @@
+#!/bin/bash
+# Start development servers in tmux
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$PROJECT_ROOT/bin/utils"
+
+SESSION_NAME="ecs-sandbox-dev"
+
+# Parse arguments
+KILL_SESSION=false
+for arg in "$@"; do
+    case $arg in
+        --kill) KILL_SESSION=true ;;
+    esac
+done
+
+# Kill existing session if requested
+if [ "$KILL_SESSION" = true ]; then
+    if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+        tmux kill-session -t "$SESSION_NAME"
+        print_success "Killed tmux session: $SESSION_NAME"
+    else
+        print_warning "No active session: $SESSION_NAME"
+    fi
+    exit 0
+fi
+
+# Check if tmux is available
+if ! command -v tmux &>/dev/null; then
+    print_error "tmux is not installed. Install it with: brew install tmux"
+    exit 1
+fi
+
+# Kill existing session if it exists
+if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    print_warning "Killing existing session: $SESSION_NAME"
+    tmux kill-session -t "$SESSION_NAME"
+fi
+
+print_header "Starting ecs-sandbox development environment"
+
+# Create new tmux session with the sandbox server
+tmux new-session -d -s "$SESSION_NAME" -n "server" \
+    "cd $PROJECT_ROOT/apps/ecs-sandbox && make dev"
+
+# Add pane for worker
+tmux split-window -t "$SESSION_NAME:server" -v \
+    "cd $PROJECT_ROOT/apps/ecs-sandbox && make worker"
+
+# Add pane for scheduler
+tmux split-window -t "$SESSION_NAME:server" -v \
+    "cd $PROJECT_ROOT/apps/ecs-sandbox && make scheduler"
+
+# Even out the panes
+tmux select-layout -t "$SESSION_NAME:server" even-vertical
+
+print_success "Development environment started in tmux session: $SESSION_NAME"
+echo ""
+echo "  Attach:  tmux attach -t $SESSION_NAME"
+echo "  Kill:    make dev ARGS='--kill'"
+echo ""

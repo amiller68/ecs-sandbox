@@ -1,0 +1,69 @@
+"""FastAPI application factory."""
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from src.config import Config
+from src.db.connection import get_engine, get_session_factory, apply_migrations
+from src.middleware.auth import AuthMiddleware
+from src.services.docker_manager import DockerManager
+from src.services.worker import SessionWorker
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application startup and shutdown."""
+    config: Config = app.state.config
+
+    # Database
+    engine = get_engine(config.db_path)
+    app.state.engine = engine
+    await apply_migrations(config.db_path)
+    print("Database ready")
+
+    # Docker manager
+    docker = DockerManager(config)
+    await docker.connect()
+    app.state.docker = docker
+    print("Docker connected")
+
+    # Session worker
+    sf = get_session_factory(engine)
+    worker = SessionWorker(sf)
+    app.state.worker = worker
+    print("Worker ready")
+
+    yield
+
+    # Shutdown
+    await worker.stop_all()
+    await docker.close()
+    await engine.dispose()
+
+
+def create_app(config: Config) -> FastAPI:
+    app = FastAPI(
+        title="ecs-sandbox",
+        description="Remote sandbox execution environment for AI agents",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
+
+    app.state.config = config
+
+    # Middleware
+    app.add_middleware(AuthMiddleware, secret=config.sandbox_secret)
+
+    # Routers
+    from src.routers import sandbox, fs, git
+
+    app.include_router(sandbox.router)
+    app.include_router(fs.router)
+    app.include_router(git.router)
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
+    return app

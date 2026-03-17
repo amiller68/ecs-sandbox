@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# Configuration management
+# Sources .env.project and provides config helpers
+#
+# NOTE: assumes that utils are already sourced by the calling script
+
+# error if project root is not set
+if [ -z "$PROJECT_ROOT" ]; then
+    echo -e "${RED}Error: PROJECT_ROOT not set.${NC}"
+    exit 1
+fi
+
+# Function to source project configuration with validation
+source_project_config() {
+    if [ -f "$PROJECT_ROOT/.env.project" ]; then
+        source "$PROJECT_ROOT/.env.project"
+    else
+        echo -e "${RED}Error: .env.project not found. Please create it with PROJECT_NAME and CLOUD_VAULT.${NC}"
+        return 1
+    fi
+    if [ ! -f "$PROJECT_ROOT/.env.vault" ]; then
+        echo -e "${RED}Error: .env.vault not found. Please create it with your OP vault items.${NC}"
+        return 1
+    fi
+
+    # Validate required variables
+    local required_vars=("PROJECT_NAME" "CLOUD_VAULT" "SERVICES" "DNS_ROOT_ZONE")
+    local missing_vars=()
+
+    for var in "${required_vars[@]}"; do
+        if [ -z "${!var}" ]; then
+            missing_vars+=("$var")
+        fi
+    done
+
+    if [ ${#missing_vars[@]} -gt 0 ]; then
+        echo -e "${RED}Error: Missing required variables in .env.project:${NC}"
+        for var in "${missing_vars[@]}"; do
+            echo -e "${RED}  - $var${NC}"
+        done
+        return 1
+    fi
+
+    return 0
+}
+
+# Service discovery from SERVICES variable
+# Returns space-separated list of service:subdomain pairs
+services() {
+    echo "$SERVICES" | tr ',' ' '
+}
+
+# List just the service names (without subdomains)
+list_service_names() {
+    local service_pairs=$(services)
+    local names=""
+
+    for service_pair in $service_pairs; do
+        local service_name="${service_pair%%:*}"
+        names+="$service_name "
+    done
+
+    echo "${names% }"
+}
+
+# List and validate stages from iac/envs directory
+stages() {
+    if [ ! -d "$PROJECT_ROOT/iac/envs" ]; then
+        echo -e "${RED}Error: iac/envs directory not found.${NC}"
+        return 1
+    fi
+
+    local iac_stages=$(ls "$PROJECT_ROOT/iac/envs" 2>/dev/null | paste -sd, -)
+    if [ -z "$iac_stages" ]; then
+        echo -e "${RED}Error: No stages found in iac/envs${NC}"
+        return 1
+    fi
+
+    # development is not a deployable stage
+    if echo "$iac_stages" | grep -q "^development$\|,development,\|,development$"; then
+        echo -e "${RED}Error: 'development' stage should not exist in iac/envs${NC}"
+        return 1
+    fi
+
+    echo "$iac_stages" | tr ',' ' '
+}
+
+# Get the hostname for a service in a given stage
+get_service_hostname() {
+    local service="$1"
+    local stage="$2"
+
+    if [ -z "$service" ] || [ -z "$stage" ]; then
+        echo -e "${RED}Error: get_service_hostname requires service and stage arguments${NC}" >&2
+        return 1
+    fi
+
+    local service_pairs=$(services)
+    local subdomain=""
+
+    for service_pair in $service_pairs; do
+        local service_name="${service_pair%%:*}"
+        if [ "$service_name" = "$service" ]; then
+            subdomain="${service_pair#*:}"
+            break
+        fi
+    done
+
+    local hostname="${DNS_ROOT_ZONE}"
+
+    if [[ -n "$subdomain" ]]; then
+        hostname="${subdomain}.${hostname}"
+    fi
+
+    if [[ "$stage" != "production" ]]; then
+        hostname="${stage}.${hostname}"
+    fi
+
+    echo "$hostname"
+}
+
+# List all subdomains for a given stage (for DNS record creation)
+list_subdomains() {
+    local stage="$1"
+
+    if [ -z "$stage" ]; then
+        echo -e "${RED}Error: list_subdomains requires stage argument${NC}" >&2
+        return 1
+    fi
+
+    local service_pairs=$(services)
+    local subdomains=""
+
+    for service_pair in $service_pairs; do
+        local subdomain="${service_pair#*:}"
+
+        if [ -z "$subdomain" ]; then
+            subdomain="@"
+        fi
+
+        if [[ "$stage" != "production" ]]; then
+            if [ "$subdomain" = "@" ]; then
+                subdomain="$stage"
+            else
+                subdomain="${stage}.${subdomain}"
+            fi
+        fi
+
+        subdomains+="$subdomain "
+    done
+
+    echo "${subdomains% }"
+}
+
+# Export service hostnames as environment variables for a given stage
+export_service_hostnames() {
+    local stage="${1}"
+    if [[ -z "$stage" ]]; then
+        echo -e "${RED}Error: Stage not set${NC}"
+        return 1
+    fi
+
+    local service_pairs=$(services)
+
+    for service_pair in $service_pairs; do
+        local service_name="${service_pair%%:*}"
+        local hostname=$(get_service_hostname "$service_name" "$stage")
+
+        local var_name=$(echo "${service_name}" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+        var_name="${var_name}_HOST_NAME"
+
+        export "${var_name}=${hostname}"
+    done
+}
+
+source_project_config
+
+# Check if script is being sourced or executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "$PROJECT_ROOT/bin/utils"
+    print_header "Project Configuration"
+
+    echo ""
+    print_info "Project:"
+    echo "  Name: $PROJECT_NAME"
+    echo "  DNS Root Zone: $DNS_ROOT_ZONE"
+    echo "  Cloud Vault: $CLOUD_VAULT"
+
+    echo ""
+    print_info "Services:"
+    for service_pair in $(services); do
+        service_name="${service_pair%%:*}"
+        subdomain="${service_pair#*:}"
+        if [ -z "$subdomain" ]; then
+            echo "  - $service_name (root domain)"
+        else
+            echo "  - $service_name (subdomain: $subdomain)"
+        fi
+    done
+
+    if [ -d "$PROJECT_ROOT/iac/envs" ]; then
+        echo ""
+        print_info "Stages:"
+        for stage in $(stages); do
+            echo "  - $stage"
+        done
+    fi
+
+    echo ""
+    echo -e "${GRAY}Note: This script is meant to be sourced by other scripts.${NC}"
+else
+    # Script is being sourced - export STAGES if iac/envs exists
+    if [ -d "$PROJECT_ROOT/iac/envs" ]; then
+        export STAGES=$(stages 2>/dev/null || echo "")
+    else
+        export STAGES=""
+    fi
+fi

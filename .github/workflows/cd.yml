@@ -1,0 +1,144 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "iac/**"
+      - ".github/workflows/cd.yml"
+  workflow_dispatch:
+    inputs:
+      services:
+        description: "Comma-separated list of services to deploy (empty = auto-detect)"
+        required: false
+        default: ""
+        type: string
+      skip-build:
+        description: "Skip the Docker build step"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+
+jobs:
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install 1Password CLI
+        uses: 1password/install-cli-action@v1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials
+        run: |
+          # AWS credentials come from 1Password via bin/vault
+          export PROJECT_ROOT=$(pwd)
+          source bin/utils
+          source bin/config
+          source bin/vault
+
+      - name: Terraform Init and Apply ECR
+        run: bin/iac ecr init -input=false && bin/iac ecr apply -auto-approve
+
+      - name: Terraform Init and Apply Production
+        run: bin/iac production init -input=false && bin/iac production apply -auto-approve
+
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      deploy-ecs-sandbox: ${{ steps.filter.outputs.ecs-sandbox }}
+      deploy-ecs-sandbox-agent: ${{ steps.filter.outputs.ecs-sandbox-agent }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            ecs-sandbox:
+              - 'apps/ecs-sandbox/**'
+              - 'packages/ecs-sandbox-client/**'
+              - 'pyproject.toml'
+              - '.github/workflows/cd.yml'
+            ecs-sandbox-agent:
+              - 'apps/ecs-sandbox-agent/**'
+              - '.github/workflows/cd.yml'
+
+  build-and-push:
+    needs: [terraform-apply, detect-changes]
+    if: |
+      github.event.inputs.skip-build != 'true' && (
+        needs.detect-changes.outputs.deploy-ecs-sandbox == 'true' ||
+        needs.detect-changes.outputs.deploy-ecs-sandbox-agent == 'true' ||
+        github.event.inputs.services != ''
+      )
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      matrix:
+        include:
+          - service: ecs-sandbox
+            changed: ${{ needs.detect-changes.outputs.deploy-ecs-sandbox }}
+          - service: ecs-sandbox-agent
+            changed: ${{ needs.detect-changes.outputs.deploy-ecs-sandbox-agent }}
+      fail-fast: false
+    steps:
+      - name: Skip if unchanged
+        if: matrix.changed != 'true' && github.event.inputs.services == ''
+        run: echo "No changes detected for ${{ matrix.service }}, skipping." && exit 0
+
+      - uses: actions/checkout@v4
+
+      - name: Install 1Password CLI
+        uses: 1password/install-cli-action@v1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and Push to ECR
+        run: |
+          chmod +x bin/docker
+          ./bin/docker build ${{ matrix.service }} -p linux/amd64
+          ./bin/vault run -- ./bin/docker push ${{ matrix.service }}
+
+  deploy-to-ecs:
+    needs: [detect-changes, build-and-push]
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      matrix:
+        include:
+          - service: ecs-sandbox
+            changed: ${{ needs.detect-changes.outputs.deploy-ecs-sandbox }}
+          - service: ecs-sandbox-agent
+            changed: ${{ needs.detect-changes.outputs.deploy-ecs-sandbox-agent }}
+      fail-fast: false
+    steps:
+      - name: Skip if unchanged
+        if: matrix.changed != 'true' && github.event.inputs.services == ''
+        run: echo "No changes detected for ${{ matrix.service }}, skipping." && exit 0
+
+      - uses: actions/checkout@v4
+
+      - name: Install 1Password CLI
+        uses: 1password/install-cli-action@v1
+
+      - name: Deploy to ECS
+        run: |
+          chmod +x bin/ecs
+          # AWS credentials injected via vault
+          ./bin/vault run -- ./bin/ecs deploy production ${{ matrix.service }} --wait

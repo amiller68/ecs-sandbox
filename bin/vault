@@ -1,0 +1,241 @@
+#!/bin/bash
+
+PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}")/.." && pwd )"
+
+source "$PROJECT_ROOT/bin/utils"
+source "$PROJECT_ROOT/bin/config"
+
+# our default is just the development vault
+DEFAULT_STAGE="development"
+
+# Vault validation caching
+VAULT_CACHE_FILE="/tmp/.vault-cache-${PROJECT_NAME}"
+VAULT_CACHE_TTL="${VAULT_CACHE_TTL:-300}"  # 5 minutes default
+
+# Skip validation via environment variable for fast iteration
+SKIP_VAULT_VALIDATION="${SKIP_VAULT_VALIDATION:-false}"
+
+# Get vault list with TTL-based caching
+get_vault_list() {
+    local now=$(date +%s)
+    local cache_time=0
+
+    if [[ -f "$VAULT_CACHE_FILE" ]]; then
+        # macOS uses -f %m, Linux uses -c %Y
+        cache_time=$(stat -f %m "$VAULT_CACHE_FILE" 2>/dev/null || stat -c %Y "$VAULT_CACHE_FILE" 2>/dev/null || echo 0)
+    fi
+
+    if (( now - cache_time > VAULT_CACHE_TTL )); then
+        op vault list --format=json 2>/dev/null > "$VAULT_CACHE_FILE" || {
+            rm -f "$VAULT_CACHE_FILE"
+            echo "Error: Failed to list vaults from 1Password" >&2
+            return 1
+        }
+    fi
+
+    cat "$VAULT_CACHE_FILE"
+}
+
+# Validate that the vaults we expect exist in 1Password
+validate_vaults() {
+    if [[ "$SKIP_VAULT_VALIDATION" == "true" ]]; then
+        return 0
+    fi
+
+    local all_stages=$STAGES
+    local all_valid=true
+
+    # Fetch vault list once
+    local vaults
+    vaults=$(get_vault_list) || return 1
+
+    # validate the deployed stages -- make an exception for ecr
+    for stage in $all_stages; do
+        if [[ "$stage" == "ecr" ]]; then
+            continue
+        fi
+        local vault_name="${PROJECT_NAME}-${stage}"
+        if ! echo "$vaults" | jq -e ".[] | select(.name == \"$vault_name\")" > /dev/null 2>&1; then
+            echo "Error: Vault '$vault_name' not found in 1Password" >&2
+            all_valid=false
+        fi
+    done
+
+    # validate the development stage
+    local development_vault="${PROJECT_NAME}-development"
+    if ! echo "$vaults" | jq -e ".[] | select(.name == \"$development_vault\")" > /dev/null 2>&1; then
+        echo "Error: Vault '$development_vault' not found in 1Password" >&2
+        all_valid=false
+    fi
+
+    # Validate cloud provider vault
+    local cloud_provider_vault="${CLOUD_VAULT}"
+    if ! echo "$vaults" | jq -e ".[] | select(.name == \"$cloud_provider_vault\")" > /dev/null 2>&1; then
+        echo "Error: Vault '$cloud_provider_vault' not found in 1Password" >&2
+        all_valid=false
+    fi
+
+    [ "$all_valid" = true ]
+}
+
+# Clear the vault cache
+clear_vault_cache() {
+    rm -f "$VAULT_CACHE_FILE"
+    echo "Vault cache cleared"
+}
+
+validate_vaults
+
+# validate that we can access 1Password
+validate_op_auth() {
+    op account get > /dev/null 2>&1
+}
+
+validate_op_auth
+
+# Function to run commands with vault
+run_with_vault() {
+    local _STAGE_ARG=""
+    local RUN_ARGS=()
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --stage)
+                _STAGE_ARG=$2
+                shift 2
+                ;;
+            --)
+                shift
+                RUN_ARGS=("$@")
+                break
+                ;;
+            *)
+                RUN_ARGS=("$@")
+                break
+                ;;
+        esac
+    done
+
+    STAGE="${_STAGE_ARG:-$DEFAULT_STAGE}"
+
+    # Validate command
+    if [ ${#RUN_ARGS[@]} -eq 0 ]; then
+        echo "Error: No command specified to run"
+        return 1
+    fi
+
+    # Export environment variables and run
+    export STAGE=$STAGE
+    export PROJECT_NAME=$PROJECT_NAME
+    export CLOUD_VAULT=$CLOUD_VAULT
+
+    op run --env-file="$PROJECT_ROOT/.env.vault" --no-masking -- "${RUN_ARGS[@]}"
+}
+
+# Function to read a single vault value
+read_from_vault() {
+    local KEY="$1"
+    local STAGE_ARG=""
+
+    # Parse stage if provided
+    if [[ "$1" == "--stage" ]]; then
+        STAGE_ARG="$2"
+        KEY="$3"
+    fi
+
+    local CURRENT_STAGE=${STAGE_ARG}
+
+    if [ -z "$KEY" ]; then
+        echo "Error: Please specify a key to read from vault" >&2
+        echo "Usage: $0 read [--stage <stage>] <KEY>" >&2
+        echo "Available keys in .env.vault:" >&2
+        grep "^[A-Z_]*=" "$PROJECT_ROOT/.env.vault" | cut -d'=' -f1 | sed 's/^/  - /' >&2
+        return 1
+    fi
+
+    # Export stage and project name for variable substitution
+    export STAGE=$CURRENT_STAGE
+    export PROJECT_NAME=$PROJECT_NAME
+    export VAULT_SLUG="${PROJECT_NAME}-${STAGE}"
+
+    # Look for the key in .env.vault
+    local VALUE=$(grep "^${KEY}=" "$PROJECT_ROOT/.env.vault" | cut -d'=' -f2-)
+
+    if [ -z "$VALUE" ]; then
+        echo "Error: Key '$KEY' not found in .env.vault" >&2
+        return 1
+    fi
+
+    # check if the value has a VAULT_SLUG variable in it
+    if [[ "$VALUE" == *'${VAULT_SLUG}'* ]] && [[ -z "$STAGE_ARG" ]]; then
+        echo "Error: Key '$KEY' requires a --stage argument" >&2
+        return 1
+    fi
+
+    # Substitute variables in the value
+    VALUE=$(eval echo "$VALUE")
+
+    # If it's a 1Password reference, resolve it
+    if [[ "$VALUE" == op://* ]]; then
+        op read "$VALUE" 2>/dev/null || {
+            echo "Error: Failed to read '$VALUE' from 1Password" >&2
+            return 1
+        }
+    else
+        echo "$VALUE"
+    fi
+}
+
+help() {
+    echo "Vault - provides nice helpers for reading env"
+    echo " from 1Password in line with the setup we expect."
+    echo ""
+    echo "Usage:"
+    echo "  $0 read [--stage <stage>] <KEY>   - Read a specific value from vault"
+    echo "  $0 run [--stage <stage>] -- CMD   - Run command with vault env"
+    echo "  $0 validate                       - Validate vault access"
+    echo "  $0 clear-cache                    - Clear vault list cache"
+    echo ""
+    echo "Environment Variables:"
+    echo "  SKIP_VAULT_VALIDATION=true        - Skip vault validation for faster iteration"
+    echo "  VAULT_CACHE_TTL=300               - Cache TTL in seconds (default: 300)"
+    echo ""
+    echo "Examples:"
+    echo "  $0 read TF_TOKEN"
+    echo "  $0 read --stage production SANDBOX_SECRET"
+    echo "  $0 run --stage development -- make dev"
+    echo "  SKIP_VAULT_VALIDATION=true $0 run -- make deploy"
+}
+
+# Check if script is being sourced or executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    CMD="${1:-help}"
+
+    case "$CMD" in
+        read)
+            shift
+            read_from_vault "$@"
+            ;;
+        run)
+            shift
+            run_with_vault "$@"
+            ;;
+        validate)
+            SKIP_VAULT_VALIDATION=false validate_vaults && echo "All vaults validated successfully"
+            ;;
+        clear-cache)
+            clear_vault_cache
+            ;;
+        help|--help)
+            help
+            ;;
+        *)
+            help
+            ;;
+    esac
+else
+    # Script is being sourced - just define the functions
+    export -f run_with_vault
+    export -f read_from_vault
+fi

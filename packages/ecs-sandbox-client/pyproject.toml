@@ -1,0 +1,25 @@
+[project]
+name = "ecs-sandbox-client"
+version = "0.1.0"
+description = "Typed Python client for the ecs-sandbox API"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx",
+    "pydantic",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.25.3",
+    "black",
+    "ruff",
+    "ty",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ecs_sandbox"]

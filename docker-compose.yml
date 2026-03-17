@@ -1,0 +1,85 @@
+version: "3.8"
+
+services:
+  ecs-sandbox:
+    build:
+      context: .
+      dockerfile: apps/ecs-sandbox/Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    container_name: ${PROJECT_NAME:-ecs-sandbox}-app
+    ports:
+      - "8000:8000"
+    environment:
+      SANDBOX_SECRET: ${SANDBOX_SECRET:-dev-secret-change-me-in-prod}
+      SANDBOX_IMAGE: ecs-sandbox-agent:latest
+      DB_PATH: /data/ecs-sandbox.db
+      WORKSPACE_BACKEND: efs
+      EFS_WORKSPACE_ROOT: /data/workspaces
+      MAX_CONTAINERS: 50
+      DEFAULT_TTL_SECONDS: 1800
+      DEBUG: "true"
+    volumes:
+      - sandbox-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/ecs-sandbox/Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    container_name: ${PROJECT_NAME:-ecs-sandbox}-worker
+    command: ["sh", "-c", "cd /app/apps/ecs-sandbox && uv run taskiq worker src.tasks:broker --fs-discover --tasks-pattern '**/tasks/**/*.py'"]
+    environment:
+      SANDBOX_SECRET: ${SANDBOX_SECRET:-dev-secret-change-me-in-prod}
+      DB_PATH: /data/ecs-sandbox.db
+      REDIS_URL: redis://redis:6379
+      WORKSPACE_BACKEND: efs
+      EFS_WORKSPACE_ROOT: /data/workspaces
+    volumes:
+      - sandbox-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: apps/ecs-sandbox/Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    container_name: ${PROJECT_NAME:-ecs-sandbox}-scheduler
+    command: ["sh", "-c", "cd /app/apps/ecs-sandbox && uv run taskiq scheduler src.tasks.scheduler:scheduler"]
+    environment:
+      SANDBOX_SECRET: ${SANDBOX_SECRET:-dev-secret-change-me-in-prod}
+      DB_PATH: /data/ecs-sandbox.db
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${PROJECT_NAME:-ecs-sandbox}-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  sandbox-data:
+    name: ${PROJECT_NAME:-ecs-sandbox}-data
+  redis-data:
+    name: ${PROJECT_NAME:-ecs-sandbox}-redis-data

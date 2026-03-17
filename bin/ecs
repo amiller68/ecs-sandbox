@@ -1,0 +1,135 @@
+#!/bin/bash
+
+# ecs - ECS operations (SSH into containers, force deployments)
+
+set -e
+
+PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}")/.." && pwd )"
+
+source "$PROJECT_ROOT/bin/utils"
+source "$PROJECT_ROOT/bin/config"
+
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $0 <command> <stage> <service-name> [task-id]"
+    echo "Commands:"
+    echo "  ssh     - SSH into a container"
+    echo "  deploy  - Force a new deployment of the service"
+    echo ""
+    echo "Deploy Options:"
+    echo "  --wait  - Wait for service to stabilize after deployment"
+    echo ""
+    echo "Examples:"
+    echo "  $0 ssh production ecs-sandbox"
+    echo "  $0 deploy production ecs-sandbox"
+    echo "  $0 deploy production ecs-sandbox --wait"
+    exit 1
+fi
+
+COMMAND=$1
+STAGE=$2
+SERVICE_NAME=$3
+TASK_ID=""
+WAIT=false
+
+# Shift the first 3 arguments to check for flags
+shift 3 2>/dev/null || true
+
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --wait) WAIT=true ;;
+        *) TASK_ID=$1 ;;
+    esac
+    shift
+done
+
+# Validate stage against known stages
+if [ -n "$STAGES" ]; then
+    if ! is_in_list "$STAGES" "$STAGE"; then
+        print_error "Unknown stage: $STAGE"
+        echo "Available stages: $STAGES"
+        exit 1
+    fi
+fi
+
+CLUSTER_NAME="${STAGE}-services"
+SERVICE_FULL_NAME="${STAGE}-${SERVICE_NAME}"
+
+case "$COMMAND" in
+"ssh")
+    if [ -z "$TASK_ID" ]; then
+        echo "No task ID provided. Fetching a running task..."
+        TASK_ID=$(aws ecs list-tasks \
+            --cluster "$CLUSTER_NAME" \
+            --service-name "$SERVICE_FULL_NAME" \
+            --output text \
+            --no-cli-pager \
+            --query 'taskArns[0]' | awk -F'/' '{print $3}')
+
+        if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "None" ]; then
+            print_error "No running tasks found for service $SERVICE_FULL_NAME"
+            exit 1
+        fi
+        echo "Selected task ID: $TASK_ID"
+    fi
+
+    # Verify task is running
+    TASK_STATUS=$(aws ecs describe-tasks \
+        --cluster "$CLUSTER_NAME" \
+        --tasks "$TASK_ID" \
+        --query 'tasks[0].lastStatus' \
+        --output text \
+        --no-cli-pager)
+
+    if [ "$TASK_STATUS" != "RUNNING" ]; then
+        print_error "Task $TASK_ID is not running (status: $TASK_STATUS)"
+        exit 1
+    fi
+
+    echo "Establishing session with container..."
+
+    aws ecs execute-command \
+        --cluster "$CLUSTER_NAME" \
+        --task "$TASK_ID" \
+        --container "$SERVICE_NAME" \
+        --command "/bin/sh" \
+        --no-cli-pager \
+        --interactive
+    ;;
+
+"deploy")
+    echo "Forcing new deployment for service $SERVICE_FULL_NAME..."
+
+    aws ecs update-service \
+        --cluster "$CLUSTER_NAME" \
+        --service "$SERVICE_FULL_NAME" \
+        --force-new-deployment \
+        --no-cli-pager
+
+    if [ $? -eq 0 ]; then
+        print_success "Deployment initiated"
+
+        if [ "$WAIT" = true ]; then
+            echo "Waiting for service to stabilize..."
+            aws ecs wait services-stable \
+                --cluster "$CLUSTER_NAME" \
+                --services "$SERVICE_FULL_NAME"
+
+            if [ $? -eq 0 ]; then
+                print_success "Service deployment completed"
+            else
+                print_error "Service failed to stabilize"
+                exit 1
+            fi
+        fi
+    else
+        print_error "Failed to initiate deployment"
+        exit 1
+    fi
+    ;;
+
+*)
+    echo "Error: Unknown command '$COMMAND'"
+    echo "Valid commands are: ssh, deploy"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+
+# docker - Docker build, push (to ECR), and run for ecs-sandbox services
+# Adapted from quotient/example-turbo-ts patterns for 1Password vault integration
+
+set -e
+
+PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}")/.." && pwd )"
+
+source "$PROJECT_ROOT/bin/utils"
+source "$PROJECT_ROOT/bin/config"
+
+usage() {
+    cat <<EOF
+Usage: $(basename $0) COMMAND SERVICE_NAME [options]
+
+Commands:
+    build         Build the docker container
+    run           Run the docker container
+    push          Push the container to ECR
+    help          Show this help message
+
+Build Options:
+    -p PLATFORM   Specify platform (e.g., linux/amd64, linux/arm64)
+                  Default: host platform
+
+Run Options:
+    -e FILE       Load environment variables from file
+    -v VOLUME     Mount volume (format: host:container)
+    -p PORT       Port mapping (format: host:container)
+    -m SIZE       Memory limit (e.g., 512m, 1g)
+    -c CPUS       CPU limit (e.g., 0.5, 1, 2)
+
+Push Options:
+    -S            Skip branch name validation (allows non-main/dev branches)
+    -D            Allow pushing from dirty working directory (not allowed for main/dev)
+    -L            Also tag unknown branches as staging-latest
+    -F            Force push to latest tag (use with caution)
+
+Environment variables required for push:
+    AWS_ACCESS_KEY_ID        AWS access key
+    AWS_SECRET_ACCESS_KEY    AWS secret key
+    AWS_REGION               AWS region
+
+    Or use: ./bin/vault run -- ./bin/docker push <service>
+
+Example:
+    $(basename $0) build ecs-sandbox
+    $(basename $0) build ecs-sandbox -p linux/amd64
+    $(basename $0) run ecs-sandbox -p 8000:8000
+    ./bin/vault run -- $(basename $0) push ecs-sandbox
+
+Note:
+    AWS Fargate requires linux/amd64 platform images.
+    Use -p linux/amd64 when building images for deployment.
+
+EOF
+    exit 1
+}
+
+# Default values
+BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+SKIP_BRANCH_CHECK=0
+ALLOW_DIRTY=0
+TAG_AS_STAGING_LATEST=0
+FORCE_LATEST=0
+
+validate_platform() {
+    if ! docker image inspect "${PROJECT_NAME}/${SERVICE_NAME}:latest" >/dev/null 2>&1; then
+        echo "Error: Image ${PROJECT_NAME}/${SERVICE_NAME}:latest not found"
+        exit 1
+    fi
+
+    PLATFORM=$(docker image inspect "${PROJECT_NAME}/${SERVICE_NAME}:latest" --format '{{.Os}}/{{.Architecture}}')
+
+    if [[ "$PLATFORM" != "linux/amd64" ]]; then
+        echo "Warning: AWS Fargate requires linux/amd64 platform"
+        echo "Current platform: $PLATFORM"
+        echo "Rebuild with: $0 build $SERVICE_NAME -p linux/amd64"
+    fi
+
+    echo "Image platform: $PLATFORM"
+}
+
+validate_branch() {
+    local current_branch=$1
+    local is_dirty=$(git status --porcelain 2>/dev/null)
+
+    # NEVER allow dirty commits from main and dev
+    if [[ -n "$is_dirty" ]] && [[ "$current_branch" =~ ^(main|dev)$ ]]; then
+        echo "Error: Dirty working directory not allowed for main or dev branches"
+        exit 1
+    fi
+
+    if [[ -n "$is_dirty" ]] && [[ "$ALLOW_DIRTY" != 1 ]]; then
+        echo "Error: Working directory not clean. Use -D to override."
+        exit 1
+    fi
+
+    if [[ "$SKIP_BRANCH_CHECK" != 1 ]]; then
+        if [[ ! "$current_branch" =~ ^(main|dev)$ ]]; then
+            echo "Error: Pushes only allowed from main or dev branches"
+            echo "Current branch: $current_branch"
+            echo "Use -S flag to bypass this restriction"
+            exit 1
+        fi
+    fi
+}
+
+setup_aws() {
+    if [[ -z "$AWS_ACCESS_KEY_ID" ]] || [[ -z "$AWS_SECRET_ACCESS_KEY" ]] || [[ -z "$AWS_REGION" ]]; then
+        echo "Error: Missing AWS credentials. Run with: ./bin/vault run -- $0 push $SERVICE_NAME"
+        exit 1
+    fi
+
+    aws ecr get-login-password --region "$AWS_REGION" | \
+        docker login --username AWS --password-stdin \
+        "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com"
+}
+
+push_to_ecr() {
+    local branch_name=$1
+    local is_dirty=$(git status --porcelain 2>/dev/null)
+
+    AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    ECR_URL="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$SERVICE_NAME"
+
+    COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+    # Sanitize branch name for docker tag
+    SAFE_BRANCH_NAME=${branch_name//\//-}
+
+    # Generate a short hash of the branch name for uniqueness
+    BRANCH_HASH=$(echo "$SAFE_BRANCH_NAME" | md5 -q 2>/dev/null || echo "$SAFE_BRANCH_NAME" | md5sum | cut -c1-6)
+    BRANCH_HASH=${BRANCH_HASH:0:6}
+
+    # Map branch to environment
+    if [[ "$SAFE_BRANCH_NAME" == "main" ]]; then
+        ENV_NAME="production"
+    elif [[ "$SAFE_BRANCH_NAME" == "dev" ]]; then
+        ENV_NAME="staging"
+    else
+        if [[ "$SAFE_BRANCH_NAME" =~ ^feature- ]]; then
+            ENV_NAME="staging-feat-${BRANCH_HASH}"
+        elif [[ "$SAFE_BRANCH_NAME" =~ ^fix- ]]; then
+            ENV_NAME="staging-fix-${BRANCH_HASH}"
+        else
+            ENV_NAME="staging-br-${BRANCH_HASH}"
+        fi
+        echo "Branch mapping: $SAFE_BRANCH_NAME -> $ENV_NAME"
+    fi
+
+    # Add dirty flag
+    if [[ -n "$is_dirty" ]]; then
+        ENV_NAME="${ENV_NAME}-dirty"
+        echo "Working directory not clean, adding -dirty suffix"
+    fi
+
+    # Tag images
+    docker tag "${PROJECT_NAME}/${SERVICE_NAME}:latest" "$ECR_URL:$ENV_NAME-$COMMIT_HASH"
+    docker tag "${PROJECT_NAME}/${SERVICE_NAME}:latest" "$ECR_URL:$ENV_NAME-latest"
+
+    if [[ "$ENV_NAME" == "production" ]] || [[ "$FORCE_LATEST" == 1 ]]; then
+        docker tag "${PROJECT_NAME}/${SERVICE_NAME}:latest" "$ECR_URL:latest"
+    fi
+
+    if [[ "$TAG_AS_STAGING_LATEST" == 1 ]] && [[ ! "$SAFE_BRANCH_NAME" =~ ^(main|dev)$ ]]; then
+        docker tag "${PROJECT_NAME}/${SERVICE_NAME}:latest" "$ECR_URL:staging-latest"
+    fi
+
+    # Push all tags
+    PUSHED_TAGS=()
+
+    docker push "$ECR_URL:$ENV_NAME-$COMMIT_HASH" && PUSHED_TAGS+=("$ECR_URL:$ENV_NAME-$COMMIT_HASH")
+    docker push "$ECR_URL:$ENV_NAME-latest" && PUSHED_TAGS+=("$ECR_URL:$ENV_NAME-latest")
+
+    if [[ "$ENV_NAME" == "production" ]] || [[ "$FORCE_LATEST" == 1 ]]; then
+        docker push "$ECR_URL:latest" && PUSHED_TAGS+=("$ECR_URL:latest")
+    fi
+
+    if [[ "$TAG_AS_STAGING_LATEST" == 1 ]] && [[ ! "$SAFE_BRANCH_NAME" =~ ^(main|dev)$ ]]; then
+        docker push "$ECR_URL:staging-latest" && PUSHED_TAGS+=("$ECR_URL:staging-latest")
+    fi
+
+    echo ""
+    echo "Pushed images:"
+    for tag in "${PUSHED_TAGS[@]}"; do
+        echo " - $tag"
+    done
+}
+
+# Main command processing
+if [[ $# -lt 2 ]]; then
+    usage
+fi
+
+COMMAND=$1
+SERVICE_NAME=$2
+shift 2
+
+case $COMMAND in
+build)
+    PLATFORM=""
+    while getopts "p:" opt; do
+        case $opt in
+        p) PLATFORM="--platform=$OPTARG" ;;
+        ?) usage ;;
+        esac
+    done
+
+    echo "Building docker container for $SERVICE_NAME..."
+    if [ -n "$PLATFORM" ]; then
+        echo "Using platform: $PLATFORM"
+        docker build $PLATFORM -t "${PROJECT_NAME}/${SERVICE_NAME}:latest" -f "apps/$SERVICE_NAME/Dockerfile" .
+    else
+        docker build -t "${PROJECT_NAME}/${SERVICE_NAME}:latest" -f "apps/$SERVICE_NAME/Dockerfile" .
+    fi
+    ;;
+run)
+    ENV_FILE=""
+    VOLUMES=()
+    PORTS=()
+    MEMORY_LIMIT=""
+    CPU_LIMIT=""
+
+    while getopts "e:v:p:m:c:" opt; do
+        case $opt in
+        e) ENV_FILE="$OPTARG" ;;
+        v) VOLUMES+=("$OPTARG") ;;
+        p) PORTS+=("$OPTARG") ;;
+        m) MEMORY_LIMIT="$OPTARG" ;;
+        c) CPU_LIMIT="$OPTARG" ;;
+        ?) usage ;;
+        esac
+    done
+
+    echo "Running docker container for $SERVICE_NAME..."
+
+    DOCKER_ARGS=("-it" "--rm")
+
+    if [[ -n "$MEMORY_LIMIT" ]]; then
+        DOCKER_ARGS+=("--memory" "$MEMORY_LIMIT" "--memory-swap" "$MEMORY_LIMIT")
+    fi
+
+    if [[ -n "$CPU_LIMIT" ]]; then
+        DOCKER_ARGS+=("--cpus" "$CPU_LIMIT")
+    fi
+
+    if [[ -n "$ENV_FILE" ]]; then
+        DOCKER_ARGS+=("--env-file" "$ENV_FILE")
+    fi
+
+    for volume in "${VOLUMES[@]}"; do
+        DOCKER_ARGS+=("-v" "$volume")
+    done
+
+    for port in "${PORTS[@]}"; do
+        DOCKER_ARGS+=("-p" "$port")
+    done
+
+    DOCKER_ARGS+=("${PROJECT_NAME}/${SERVICE_NAME}:latest")
+
+    docker run "${DOCKER_ARGS[@]}"
+    ;;
+push)
+    while getopts "SDLF" opt; do
+        case $opt in
+        S) SKIP_BRANCH_CHECK=1 ;;
+        D) ALLOW_DIRTY=1 ;;
+        L) TAG_AS_STAGING_LATEST=1 ;;
+        F) FORCE_LATEST=1 ;;
+        ?) usage ;;
+        esac
+    done
+
+    echo "Validating image platform..."
+    validate_platform
+
+    validate_branch "$BRANCH_NAME"
+
+    setup_aws
+    push_to_ecr "$BRANCH_NAME"
+    ;;
+help | --help | -h)
+    usage
+    ;;
+*)
+    echo "Error: Unknown command '$COMMAND'"
+    usage
+    ;;
+esac
