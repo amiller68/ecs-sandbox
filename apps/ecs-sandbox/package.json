@@ -6,6 +6,7 @@
     "dev": "./bin/dev.sh",
     "dev:worker": "./bin/worker.sh",
     "dev:scheduler": "./bin/scheduler.sh",
+    "dev:agent-watch": "./bin/agent-watch.sh",
     "fmt": "make fmt",
     "fmt:check": "make fmt-check",
     "lint": "make lint",

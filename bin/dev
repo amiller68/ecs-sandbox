@@ -52,6 +52,10 @@ tmux split-window -t "$SESSION_NAME:server" -v \
 tmux split-window -t "$SESSION_NAME:server" -v \
     "cd $PROJECT_ROOT/apps/ecs-sandbox && make scheduler"
 
+# Add pane for agent image watcher
+tmux split-window -t "$SESSION_NAME:server" -v \
+    "cd $PROJECT_ROOT/apps/ecs-sandbox && ./bin/agent-watch.sh"
+
 # Even out the panes
 tmux select-layout -t "$SESSION_NAME:server" even-vertical
 

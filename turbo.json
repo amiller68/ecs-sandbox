@@ -24,6 +24,11 @@
       "cache": false,
       "persistent": true
     },
+    "dev:agent-watch": {
+      "dependsOn": ["setup"],
+      "cache": false,
+      "persistent": true
+    },
     "fmt": {},
     "fmt:check": {},
     "lint": {},
