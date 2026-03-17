@@ -33,7 +33,7 @@ async def reap_stale_sessions(
         },
     )
     await db.commit()
-    return {"stale_marked": result.rowcount}
+    return {"stale_marked": result.rowcount}  # type: ignore[union-attr]
 
 
 @cron("0 */6 * * *", lock_ttl=600)
@@ -51,4 +51,4 @@ async def prune_old_events(
         {"destroyed": SessionStatus.DESTROYED.value, "cutoff": cutoff},
     )
     await db.commit()
-    return {"events_pruned": result.rowcount}
+    return {"events_pruned": result.rowcount}  # type: ignore[union-attr]

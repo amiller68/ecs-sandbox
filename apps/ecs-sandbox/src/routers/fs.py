@@ -31,7 +31,7 @@ async def _get_sidecar_url(request: Request, session_id: str) -> str:
             db, session_id=session_id, ttl_seconds=config.default_ttl_seconds
         )
 
-    ip = session.container_ip
+    ip = session.container_ip or ""
     if ":" in ip:
         return f"http://{ip}"
     return f"http://{ip}:2222"
