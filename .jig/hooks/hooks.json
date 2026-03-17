@@ -1,0 +1,25 @@
+{
+  "version": "1",
+  "installed": {
+    "pre-commit": {
+      "installed_at": "2026-03-17T17:09:41.191035+00:00",
+      "jig_version": "1.4.0",
+      "had_existing": false
+    },
+    "post-commit": {
+      "installed_at": "2026-03-17T17:09:41.190922+00:00",
+      "jig_version": "1.4.0",
+      "had_existing": false
+    },
+    "post-merge": {
+      "installed_at": "2026-03-17T17:09:41.190977+00:00",
+      "jig_version": "1.4.0",
+      "had_existing": false
+    },
+    "commit-msg": {
+      "installed_at": "2026-03-17T17:09:41.190737+00:00",
+      "jig_version": "1.4.0",
+      "had_existing": false
+    }
+  }
+}
