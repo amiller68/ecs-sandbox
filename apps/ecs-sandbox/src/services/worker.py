@@ -8,6 +8,8 @@ import httpx
 import sqlalchemy
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from src.types import EventStatus, ExecResult
+
 
 class SessionWorker:
     """Manages per-session command execution queues."""
@@ -57,9 +59,9 @@ class SessionWorker:
             # Update status to running
             await db.execute(
                 sqlalchemy.text(
-                    "UPDATE events SET status = 'running' WHERE session_id = :sid AND seq = :seq"
+                    "UPDATE events SET status = :status WHERE session_id = :sid AND seq = :seq"
                 ),
-                {"sid": session_id, "seq": seq},
+                {"status": EventStatus.RUNNING.value, "sid": session_id, "seq": seq},
             )
             await db.commit()
 
@@ -74,17 +76,19 @@ class SessionWorker:
                 timeout=payload.get("timeout_seconds", 300)
             ) as client:
                 resp = await client.post(f"{url}/exec", json=payload)
-                exec_result = resp.json()
+                raw = resp.json()
+                exec_result = ExecResult(
+                    stdout=raw.get("stdout", ""),
+                    stderr=raw.get("stderr", ""),
+                    exit_code=raw.get("exit_code", 1),
+                    duration_ms=raw.get("duration_ms", 0),
+                )
         except Exception as e:
-            exec_result = {
-                "stdout": "",
-                "stderr": str(e),
-                "exit_code": 1,
-                "duration_ms": 0,
-            }
+            exec_result = ExecResult(stderr=str(e))
 
         # Write result back
         now = int(time.time() * 1000)
+        status = EventStatus.DONE if exec_result.exit_code == 0 else EventStatus.ERROR
         async with self._sf() as db:
             await db.execute(
                 sqlalchemy.text(
@@ -92,10 +96,15 @@ class SessionWorker:
                     WHERE session_id = :sid AND seq = :seq"""
                 ),
                 {
-                    "status": (
-                        "done" if exec_result.get("exit_code", 1) == 0 else "error"
+                    "status": status.value,
+                    "result": json.dumps(
+                        {
+                            "stdout": exec_result.stdout,
+                            "stderr": exec_result.stderr,
+                            "exit_code": exec_result.exit_code,
+                            "duration_ms": exec_result.duration_ms,
+                        }
                     ),
-                    "result": json.dumps(exec_result),
                     "now": now,
                     "sid": session_id,
                     "seq": seq,

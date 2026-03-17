@@ -4,53 +4,51 @@ import os
 import time
 
 import sqlalchemy
+from sqlalchemy.ext.asyncio import AsyncSession
+from taskiq import TaskiqDepends
 
-from src.db.connection import get_engine, get_session_factory
 from src.tasks.cron import cron
+from src.tasks.deps import get_db_session
+from src.types import SessionStatus
 
 STALE_THRESHOLD_MINUTES = int(os.getenv("CLEANUP_STALE_THRESHOLD_MINUTES", "60"))
 RETENTION_DAYS = int(os.getenv("CLEANUP_RETENTION_DAYS", "7"))
 
 
-def _get_sf():
-    engine = get_engine()
-    return get_session_factory(engine)
-
-
 @cron("*/10 * * * *", lock_ttl=300)
-async def reap_stale_sessions() -> dict:
+async def reap_stale_sessions(
+    db: AsyncSession = TaskiqDepends(get_db_session),
+) -> dict:
     """Mark stale sessions and clean up their containers."""
-    sf = _get_sf()
     now_ms = int(time.time() * 1000)
     cutoff = now_ms - (STALE_THRESHOLD_MINUTES * 60 * 1000)
 
-    async with sf() as db:
-        result = await db.execute(
-            sqlalchemy.text("""UPDATE sessions SET status = 'stale'
-                WHERE status = 'active' AND last_active_at < :cutoff"""),
-            {"cutoff": cutoff},
-        )
-        await db.commit()
-        stale_count = result.rowcount
-
-    return {"stale_marked": stale_count}
+    result = await db.execute(
+        sqlalchemy.text("""UPDATE sessions SET status = :stale
+            WHERE status = :active AND last_active_at < :cutoff"""),
+        {
+            "stale": SessionStatus.STALE.value,
+            "active": SessionStatus.ACTIVE.value,
+            "cutoff": cutoff,
+        },
+    )
+    await db.commit()
+    return {"stale_marked": result.rowcount}
 
 
 @cron("0 */6 * * *", lock_ttl=600)
-async def prune_old_events() -> dict:
+async def prune_old_events(
+    db: AsyncSession = TaskiqDepends(get_db_session),
+) -> dict:
     """Delete events for sessions destroyed more than RETENTION_DAYS ago."""
-    sf = _get_sf()
     cutoff = int(time.time() * 1000) - (RETENTION_DAYS * 24 * 60 * 60 * 1000)
 
-    async with sf() as db:
-        result = await db.execute(
-            sqlalchemy.text("""DELETE FROM events WHERE session_id IN (
-                    SELECT id FROM sessions
-                    WHERE status = 'destroyed' AND last_active_at < :cutoff
-                )"""),
-            {"cutoff": cutoff},
-        )
-        await db.commit()
-        pruned = result.rowcount
-
-    return {"events_pruned": pruned}
+    result = await db.execute(
+        sqlalchemy.text("""DELETE FROM events WHERE session_id IN (
+                SELECT id FROM sessions
+                WHERE status = :destroyed AND last_active_at < :cutoff
+            )"""),
+        {"destroyed": SessionStatus.DESTROYED.value, "cutoff": cutoff},
+    )
+    await db.commit()
+    return {"events_pruned": result.rowcount}

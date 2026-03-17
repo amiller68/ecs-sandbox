@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     print("Database ready")
 
     # Redis (for background job dependencies)
-    redis = Redis.from_url(config.redis_url, decode_responses=True)
+    redis = Redis.from_url(config.redis_url)
     app.state.redis = redis
     print("Redis connected")
 
@@ -38,8 +38,7 @@ async def lifespan(app: FastAPI):
     print("Docker connected")
 
     # Session worker
-    sf = get_session_factory(engine)
-    worker = SessionWorker(sf)
+    worker = SessionWorker(app.state.session_factory)
     app.state.worker = worker
     print("Worker ready")
 

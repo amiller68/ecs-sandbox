@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from src.db import queries
-from src.db.connection import get_session_factory
+from src.types import SessionStatus
 
 router = APIRouter(prefix="/sandbox/{session_id}/fs", tags=["filesystem"])
 
@@ -20,19 +20,18 @@ class DeleteFileBody(BaseModel):
 
 
 async def _get_sidecar_url(request: Request, session_id: str) -> str:
-    engine = request.app.state.engine
+    sf = request.app.state.session_factory
     config = request.app.state.config
-    sf = get_session_factory(engine)
 
     async with sf() as db:
         session = await queries.get_session(db, session_id=session_id)
-        if not session or session["status"] != "active":
+        if not session or session.status != SessionStatus.ACTIVE:
             raise HTTPException(404, "session not found or not active")
         await queries.touch_session(
             db, session_id=session_id, ttl_seconds=config.default_ttl_seconds
         )
 
-    ip = session["container_ip"]
+    ip = session.container_ip
     if ":" in ip:
         return f"http://{ip}"
     return f"http://{ip}:2222"

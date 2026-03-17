@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from src.db import queries
-from src.db.connection import get_session_factory
+from src.types import EventKind, SessionStatus
 
 router = APIRouter(prefix="/sandbox/{session_id}/git", tags=["git"])
 
@@ -22,14 +22,13 @@ class GitCommitBody(BaseModel):
 @router.post("/clone", status_code=202)
 async def git_clone(session_id: str, body: GitCloneBody, request: Request):
     """Clone a repository into the sandbox."""
-    engine = request.app.state.engine
+    sf = request.app.state.session_factory
     config = request.app.state.config
     worker = request.app.state.worker
-    sf = get_session_factory(engine)
 
     async with sf() as db:
         session = await queries.get_session(db, session_id=session_id)
-        if not session or session["status"] != "active":
+        if not session or session.status != SessionStatus.ACTIVE:
             raise HTTPException(404, "session not found or not active")
 
         seq = await queries.next_seq(db, session_id=session_id)
@@ -38,7 +37,7 @@ async def git_clone(session_id: str, body: GitCloneBody, request: Request):
             db,
             session_id=session_id,
             seq=seq,
-            kind="git_clone",
+            kind=EventKind.GIT_CLONE,
             payload={
                 "cmd": cmd,
                 "cwd": "/",
@@ -51,21 +50,20 @@ async def git_clone(session_id: str, body: GitCloneBody, request: Request):
             db, session_id=session_id, ttl_seconds=config.default_ttl_seconds
         )
 
-    worker.submit(session_id, seq, session["container_ip"])
+    worker.submit(session_id, seq, session.container_ip)
     return {"seq": seq, "status": "pending"}
 
 
 @router.post("/commit", status_code=202)
 async def git_commit(session_id: str, body: GitCommitBody, request: Request):
     """Commit changes in the sandbox."""
-    engine = request.app.state.engine
+    sf = request.app.state.session_factory
     config = request.app.state.config
     worker = request.app.state.worker
-    sf = get_session_factory(engine)
 
     async with sf() as db:
         session = await queries.get_session(db, session_id=session_id)
-        if not session or session["status"] != "active":
+        if not session or session.status != SessionStatus.ACTIVE:
             raise HTTPException(404, "session not found or not active")
 
         seq = await queries.next_seq(db, session_id=session_id)
@@ -75,12 +73,12 @@ async def git_commit(session_id: str, body: GitCommitBody, request: Request):
             db,
             session_id=session_id,
             seq=seq,
-            kind="git_commit",
+            kind=EventKind.GIT_COMMIT,
             payload={"cmd": cmd, "cwd": "/workspace", "timeout_seconds": 60},
         )
         await queries.touch_session(
             db, session_id=session_id, ttl_seconds=config.default_ttl_seconds
         )
 
-    worker.submit(session_id, seq, session["container_ip"])
+    worker.submit(session_id, seq, session.container_ip)
     return {"seq": seq, "status": "pending"}
