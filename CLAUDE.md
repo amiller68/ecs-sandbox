@@ -30,7 +30,7 @@ apps/
 packages/
   ecs-sandbox-client/      # Typed Python client library (httpx + pydantic)
 iac/                       # Terraform (ECS, EFS, ECR, networking)
-bin/                       # Dev and deploy scripts (dev, worktree, worktree-ports, vault, etc.)
+bin/                       # Dev and deploy scripts (dev, worktree-ports, vault, etc.)
 docs/                      # Architecture, patterns, and dev guides
 issues/                    # File-based issue tracking
 ```
