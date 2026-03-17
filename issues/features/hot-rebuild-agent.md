@@ -1,6 +1,6 @@
 # Hot-rebuild agent image during dev
 
-**Status:** Planned
+**Status:** Complete
 **Labels:** dx, auto
 
 ## Objective

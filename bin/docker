@@ -209,11 +209,20 @@ build)
     done
 
     echo "Building docker container for $SERVICE_NAME..."
+
+    # Use project root as build context if Dockerfile declares it, otherwise use app dir
+    DOCKERFILE="apps/$SERVICE_NAME/Dockerfile"
+    if head -1 "$DOCKERFILE" | grep -qi "build context is the repository root"; then
+        BUILD_CONTEXT="."
+    else
+        BUILD_CONTEXT="apps/$SERVICE_NAME"
+    fi
+
     if [ -n "$PLATFORM" ]; then
         echo "Using platform: $PLATFORM"
-        docker build $PLATFORM -t "${PROJECT_NAME}/${SERVICE_NAME}:latest" -f "apps/$SERVICE_NAME/Dockerfile" .
+        docker build $PLATFORM -t "${PROJECT_NAME}/${SERVICE_NAME}:latest" -f "$DOCKERFILE" "$BUILD_CONTEXT"
     else
-        docker build -t "${PROJECT_NAME}/${SERVICE_NAME}:latest" -f "apps/$SERVICE_NAME/Dockerfile" .
+        docker build -t "${PROJECT_NAME}/${SERVICE_NAME}:latest" -f "$DOCKERFILE" "$BUILD_CONTEXT"
     fi
     ;;
 run)
