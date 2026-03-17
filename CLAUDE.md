@@ -17,9 +17,6 @@ make types                # Type check all code (ty)
 make teardown             # Stop local dev services
 make docker-up            # Start docker-compose stack with vault secrets
 make docker-down          # Stop docker-compose stack
-make worktree-create NAME=x  # Create a new worktree
-make worktree-list        # List active worktrees
-make worktree-remove NAME=x  # Remove a worktree
 make ports                # Show current port assignments
 ```
 

@@ -51,24 +51,24 @@ write_dev_info
 show_worktree_config
 
 # Ensure data directory exists
-mkdir -p "$(dirname "$DB_PATH")"
+mkdir -p "$PROJECT_ROOT/data"
 
 # Export env vars so tmux panes inherit them
-export BACKEND_PORT REDIS_DB_INDEX DB_PATH REDIS_URL LISTEN_PORT
+export BACKEND_PORT REDIS_DB_INDEX REDIS_URL LISTEN_PORT
 
 print_header "Starting ecs-sandbox development environment"
 
 # Create new tmux session with the sandbox server
 tmux new-session -d -s "$SESSION_NAME" -n "server" \
-    "cd $PROJECT_ROOT/apps/ecs-sandbox && LISTEN_PORT=$LISTEN_PORT DB_PATH=$DB_PATH REDIS_URL=$REDIS_URL make dev"
+    "cd $PROJECT_ROOT/apps/ecs-sandbox && LISTEN_PORT=$LISTEN_PORT REDIS_URL=$REDIS_URL make dev"
 
 # Add pane for worker
 tmux split-window -t "$SESSION_NAME:server" -v \
-    "cd $PROJECT_ROOT/apps/ecs-sandbox && DB_PATH=$DB_PATH REDIS_URL=$REDIS_URL make worker"
+    "cd $PROJECT_ROOT/apps/ecs-sandbox && REDIS_URL=$REDIS_URL make worker"
 
 # Add pane for scheduler
 tmux split-window -t "$SESSION_NAME:server" -v \
-    "cd $PROJECT_ROOT/apps/ecs-sandbox && DB_PATH=$DB_PATH REDIS_URL=$REDIS_URL make scheduler"
+    "cd $PROJECT_ROOT/apps/ecs-sandbox && REDIS_URL=$REDIS_URL make scheduler"
 
 # Add pane for agent image watcher
 tmux split-window -t "$SESSION_NAME:server" -v \
