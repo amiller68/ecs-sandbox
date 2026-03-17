@@ -3,7 +3,6 @@
 import pathlib
 from contextlib import asynccontextmanager
 
-import sqlalchemy
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
@@ -11,9 +10,9 @@ from redis.asyncio import Redis
 from src.config import Config
 from src.db.connection import get_engine, get_session_factory, apply_migrations
 from src.middleware.auth import AuthMiddleware
+from src.services.cleanup import get_active_sessions, mark_destroyed
 from src.services.docker_manager import DockerManager
 from src.services.worker import SessionWorker
-from src.types import SessionStatus
 
 
 async def _cleanup_stale_sessions(session_factory, docker: DockerManager) -> int:
@@ -23,26 +22,12 @@ async def _cleanup_stale_sessions(session_factory, docker: DockerManager) -> int
     unreachable. This cleans them up automatically on startup.
     """
     async with session_factory() as db:
-        result = await db.execute(
-            sqlalchemy.text(
-                "SELECT id, container_id FROM sessions WHERE status = :active"
-            ),
-            {"active": SessionStatus.ACTIVE.value},
-        )
-        stale = result.mappings().all()
-
-        for row in stale:
+        sessions = await get_active_sessions(db)
+        for row in sessions:
             if row["container_id"]:
                 await docker.remove_container(row["container_id"])
-            await db.execute(
-                sqlalchemy.text(
-                    "UPDATE sessions SET status = :destroyed WHERE id = :id"
-                ),
-                {"destroyed": SessionStatus.DESTROYED.value, "id": row["id"]},
-            )
-
-        await db.commit()
-        return len(stale)
+            await mark_destroyed(db, row["id"])
+        return len(sessions)
 
 
 @asynccontextmanager
