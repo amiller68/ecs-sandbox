@@ -1,6 +1,8 @@
 """Web terminal: browser-based shell for sandbox sessions."""
 
 import asyncio
+import re
+import shlex
 from dataclasses import asdict
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -23,6 +25,9 @@ from src.types import (
     WsOutput,
     WsSessionCreated,
 )
+
+_CWD_SENTINEL = "___CWD___"
+_CD_RE = re.compile(r"(?:^|&&|;)\s*cd(?:\s|$)")
 
 router = APIRouter(prefix="/web", tags=["web"])
 
@@ -75,6 +80,9 @@ async def terminal_ws(websocket: WebSocket, session_id: str):
     except Exception as e:
         await websocket.send_json(WsError(message=str(e)).to_msg())
 
+    # Per-connection working directory
+    cwd = "/workspace"
+
     # Message loop
     try:
         while True:
@@ -86,7 +94,9 @@ async def terminal_ws(websocket: WebSocket, session_id: str):
             if msg_data.get("type") == "create_session":
                 await _handle_create_session(websocket, sf, session_id)
             elif "cmd" in msg_data:
-                await _handle_exec(websocket, sf, session_id, msg_data["cmd"])
+                cwd = await _handle_exec(
+                    websocket, sf, session_id, msg_data["cmd"], cwd
+                )
             else:
                 await websocket.send_json(WsError(message="unknown message").to_msg())
     except WebSocketDisconnect:
@@ -113,9 +123,23 @@ async def _handle_create_session(websocket: WebSocket, sf, session_id: str):
         await websocket.send_json(WsError(message=str(e)).to_msg())
 
 
-async def _handle_exec(websocket: WebSocket, sf, session_id: str, cmd: str):
+async def _handle_exec(
+    websocket: WebSocket, sf, session_id: str, cmd: str, cwd: str
+) -> str:
+    """Execute a command and return the updated cwd."""
     config = websocket.app.state.config
     worker = websocket.app.state.worker
+
+    # Detect if the command contains a cd so we can capture the resulting cwd
+    has_cd = bool(_CD_RE.search(cmd))
+
+    # Wrap the command so it runs in the tracked cwd.
+    # If the command contains a cd, append `&& pwd` with a sentinel so we can
+    # parse out the new working directory from stdout.
+    if has_cd:
+        wrapped = f"cd {shlex.quote(cwd)} && {cmd} && echo {_CWD_SENTINEL} && pwd"
+    else:
+        wrapped = f"cd {shlex.quote(cwd)} && {cmd}"
 
     async with sf() as db:
         session = await queries.get_session(db, session_id=session_id)
@@ -123,7 +147,7 @@ async def _handle_exec(websocket: WebSocket, sf, session_id: str, cmd: str):
             await websocket.send_json(
                 WsError(message="session not found or not active").to_msg()
             )
-            return
+            return cwd
 
         seq = await queries.next_seq(db, session_id=session_id)
         await queries.insert_event(
@@ -131,7 +155,7 @@ async def _handle_exec(websocket: WebSocket, sf, session_id: str, cmd: str):
             session_id=session_id,
             seq=seq,
             kind=EventKind.EXEC_SUBMIT,
-            payload={"cmd": cmd, "cwd": "/workspace"},
+            payload={"cmd": wrapped, "cwd": cwd},
         )
         await queries.touch_session(
             db, session_id=session_id, ttl_seconds=config.default_ttl_seconds
@@ -146,13 +170,27 @@ async def _handle_exec(websocket: WebSocket, sf, session_id: str, cmd: str):
             event = await queries.get_event(db, session_id=session_id, seq=seq)
         if event and event.status in (EventStatus.DONE, EventStatus.ERROR):
             result = event.result or {}
+            stdout = result.get("stdout", "")
+            exit_code = result.get("exit_code", 1)
+
+            # If the command succeeded and contained a cd, extract the new cwd
+            new_cwd = cwd
+            if has_cd and exit_code == 0 and _CWD_SENTINEL in stdout:
+                parts = stdout.rsplit(_CWD_SENTINEL, 1)
+                stdout = parts[0]  # output before sentinel
+                parsed_cwd = parts[1].strip()
+                if parsed_cwd:
+                    new_cwd = parsed_cwd
+
             msg = WsOutput(
-                stdout=result.get("stdout", ""),
+                stdout=stdout,
                 stderr=result.get("stderr", ""),
-                exit_code=result.get("exit_code", 1),
+                exit_code=exit_code,
                 duration_ms=result.get("duration_ms", 0),
+                cwd=new_cwd,
             )
             await websocket.send_json(msg.to_msg())
-            return
+            return new_cwd
 
     await websocket.send_json(WsError(message="command timed out").to_msg())
+    return cwd
