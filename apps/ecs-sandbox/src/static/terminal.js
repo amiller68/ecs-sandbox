@@ -6,8 +6,13 @@
   const statusEl = document.getElementById("status");
   const container = document.getElementById("terminal-container");
 
-  // Pre-fill session ID with a UUID
-  sessionInput.value = crypto.randomUUID();
+  // Pre-fill from URL query params
+  const params = new URLSearchParams(window.location.search);
+  const urlToken = params.get("token");
+  const urlSession = params.get("session");
+
+  sessionInput.value = urlSession || crypto.randomUUID();
+  if (urlToken) tokenInput.value = urlToken;
 
   let term = null;
   let ws = null;
@@ -148,4 +153,9 @@
     if (!sessionId || !token) return;
     connect(sessionId, token);
   });
+
+  // Auto-connect when both token and session are provided via URL
+  if (urlToken && urlSession) {
+    connect(urlSession, urlToken);
+  }
 })();
