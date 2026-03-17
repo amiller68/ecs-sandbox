@@ -1,12 +1,16 @@
 # Worktree configuration
 [worktree]
-# base = "origin/main"       # Base branch for new worktrees
-# on_create = "npm install"  # Command to run after worktree creation
-# copy = [".env"]            # Gitignored files to copy to new worktrees
+base = "origin/main"
+on_create = "make install"
+copy = [".env"]
 
 # Spawn configuration
 [spawn]
 auto = true
+
+# Issues configuration
+[issues]
+spawn_labels = ["auto"]
 
 # Agent configuration
 [agent]

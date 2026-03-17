@@ -1,7 +1,7 @@
 # Track cwd server-side
 
 **Status:** Planned
-**Labels:** web-terminal, quick-win
+**Labels:** web-terminal, quick-win, auto
 
 ## Objective
 

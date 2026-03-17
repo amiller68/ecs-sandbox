@@ -47,7 +47,10 @@
       "Bash(find:*)",
       "Bash(grep:*)",
       "Bash(rg:*)",
-      "Bash(./test.sh:*)"
+      "Bash(docker:*)",
+      "Bash(docker-compose:*)",
+      "Bash(sqlite3:*)",
+      "Bash(curl:*)"
     ],
     "deny": [
       "Bash(rm -rf /)",
