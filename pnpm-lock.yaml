@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@playwright/mcp':
+        specifier: ^0.0.68
+        version: 0.0.68
       turbo:
         specifier: ^2.5.8
         version: 2.8.17
@@ -15,6 +18,26 @@ importers:
   apps/ecs-sandbox: {}
 
 packages:
+
+  '@playwright/mcp@0.0.68':
+    resolution: {integrity: sha512-oP9I9ghXKuQEBo4xaC7HgsS2gRTxyMzlBm3UEhYj4VqqrqbPQUX2shATPaNA/am9joBzq9v0OXISzeIgP+zmHA==}
+    engines: {node: '>=18'}
+    hasBin: true
+
+  fsevents@2.3.2:
+    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
+    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
+    os: [darwin]
+
+  playwright-core@1.59.0-alpha-1771104257000:
+    resolution: {integrity: sha512-YiXup3pnpQUCBMSIW5zx8CErwRx4K6O5Kojkw2BzJui8MazoMUDU6E3xGsb1kzFviEAE09LFQ+y1a0RhIJQ5SA==}
+    engines: {node: '>=18'}
+    hasBin: true
+
+  playwright@1.59.0-alpha-1771104257000:
+    resolution: {integrity: sha512-6SCMMMJaDRsSqiKVLmb2nhtLES7iTYawTWWrQK6UdIGNzXi8lka4sLKRec3L4DnTWwddAvCuRn8035dhNiHzbg==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   turbo-darwin-64@2.8.17:
     resolution: {integrity: sha512-ZFkv2hv7zHpAPEXBF6ouRRXshllOavYc+jjcrYyVHvxVTTwJWsBZwJ/gpPzmOKGvkSjsEyDO5V6aqqtZzwVF+Q==}
@@ -51,6 +74,22 @@ packages:
     hasBin: true
 
 snapshots:
+
+  '@playwright/mcp@0.0.68':
+    dependencies:
+      playwright: 1.59.0-alpha-1771104257000
+      playwright-core: 1.59.0-alpha-1771104257000
+
+  fsevents@2.3.2:
+    optional: true
+
+  playwright-core@1.59.0-alpha-1771104257000: {}
+
+  playwright@1.59.0-alpha-1771104257000:
+    dependencies:
+      playwright-core: 1.59.0-alpha-1771104257000
+    optionalDependencies:
+      fsevents: 2.3.2
 
   turbo-darwin-64@2.8.17:
     optional: true

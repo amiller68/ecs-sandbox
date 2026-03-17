@@ -5,7 +5,13 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$PROJECT_ROOT/bin/utils"
 
-SESSION_NAME="ecs-sandbox-dev"
+# Allocate ports and derive per-worktree config
+source "$PROJECT_ROOT/bin/worktree-ports"
+get_worktree_config
+
+# Derive tmux session name from branch
+BRANCH_NAME=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+SESSION_NAME="ecs-sandbox-$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g')"
 
 # Parse arguments
 KILL_SESSION=false
@@ -23,6 +29,8 @@ if [ "$KILL_SESSION" = true ]; then
     else
         print_warning "No active session: $SESSION_NAME"
     fi
+    # Clean up .dev-server
+    rm -f "$PROJECT_ROOT/.dev-server"
     exit 0
 fi
 
@@ -38,19 +46,29 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
     tmux kill-session -t "$SESSION_NAME"
 fi
 
+# Write .dev-server file and show config
+write_dev_info
+show_worktree_config
+
+# Ensure data directory exists
+mkdir -p "$(dirname "$DB_PATH")"
+
+# Export env vars so tmux panes inherit them
+export BACKEND_PORT REDIS_DB_INDEX DB_PATH REDIS_URL LISTEN_PORT
+
 print_header "Starting ecs-sandbox development environment"
 
 # Create new tmux session with the sandbox server
 tmux new-session -d -s "$SESSION_NAME" -n "server" \
-    "cd $PROJECT_ROOT/apps/ecs-sandbox && make dev"
+    "cd $PROJECT_ROOT/apps/ecs-sandbox && LISTEN_PORT=$LISTEN_PORT DB_PATH=$DB_PATH REDIS_URL=$REDIS_URL make dev"
 
 # Add pane for worker
 tmux split-window -t "$SESSION_NAME:server" -v \
-    "cd $PROJECT_ROOT/apps/ecs-sandbox && make worker"
+    "cd $PROJECT_ROOT/apps/ecs-sandbox && DB_PATH=$DB_PATH REDIS_URL=$REDIS_URL make worker"
 
 # Add pane for scheduler
 tmux split-window -t "$SESSION_NAME:server" -v \
-    "cd $PROJECT_ROOT/apps/ecs-sandbox && make scheduler"
+    "cd $PROJECT_ROOT/apps/ecs-sandbox && DB_PATH=$DB_PATH REDIS_URL=$REDIS_URL make scheduler"
 
 # Add pane for agent image watcher
 tmux split-window -t "$SESSION_NAME:server" -v \
@@ -61,6 +79,7 @@ tmux select-layout -t "$SESSION_NAME:server" even-vertical
 
 print_success "Development environment started in tmux session: $SESSION_NAME"
 echo ""
+echo "  Server:  http://localhost:$BACKEND_PORT"
 echo "  Attach:  tmux attach -t $SESSION_NAME"
 echo "  Kill:    make dev ARGS='--kill'"
 echo ""

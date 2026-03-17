@@ -9,11 +9,11 @@ services:
         BUILDKIT_INLINE_CACHE: 1
     container_name: ${PROJECT_NAME:-ecs-sandbox}-app
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     environment:
       SANDBOX_SECRET: ${SANDBOX_SECRET:-not-secure}
       SANDBOX_IMAGE: ecs-sandbox-agent:latest
-      DB_PATH: /data/ecs-sandbox.db
+      DB_PATH: ${DB_PATH:-/data/ecs-sandbox.db}
       WORKSPACE_BACKEND: efs
       EFS_WORKSPACE_ROOT: /data/workspaces
       MAX_CONTAINERS: 50
@@ -34,8 +34,8 @@ services:
     command: ["sh", "-c", "cd /app/apps/ecs-sandbox && uv run taskiq worker src.tasks:broker --fs-discover --tasks-pattern '**/tasks/**/*.py'"]
     environment:
       SANDBOX_SECRET: ${SANDBOX_SECRET:-not-secure}
-      DB_PATH: /data/ecs-sandbox.db
-      REDIS_URL: redis://redis:6379
+      DB_PATH: ${DB_PATH:-/data/ecs-sandbox.db}
+      REDIS_URL: redis://redis:6379/${REDIS_DB_INDEX:-0}
       WORKSPACE_BACKEND: efs
       EFS_WORKSPACE_ROOT: /data/workspaces
     volumes:
@@ -56,8 +56,8 @@ services:
     command: ["sh", "-c", "cd /app/apps/ecs-sandbox && uv run taskiq scheduler src.tasks.scheduler:scheduler"]
     environment:
       SANDBOX_SECRET: ${SANDBOX_SECRET:-not-secure}
-      DB_PATH: /data/ecs-sandbox.db
-      REDIS_URL: redis://redis:6379
+      DB_PATH: ${DB_PATH:-/data/ecs-sandbox.db}
+      REDIS_URL: redis://redis:6379/${REDIS_DB_INDEX:-0}
     depends_on:
       redis:
         condition: service_healthy

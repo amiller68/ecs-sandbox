@@ -135,6 +135,27 @@ deploy: ## Deploy all services - usage: make deploy <stage>
 	@STAGE=$(word 2,$(MAKECMDGOALS)); \
 	./bin/vault run -- ./bin/ecs deploy $$STAGE ecs-sandbox --wait
 
+# Worktree management
+.PHONY: worktree-create
+worktree-create: ## Create a new worktree (NAME=<name> [BRANCH=<branch>])
+	@./bin/worktree create $(NAME) $(BRANCH)
+
+.PHONY: worktree-list
+worktree-list: ## List active worktrees
+	@./bin/worktree list
+
+.PHONY: worktree-remove
+worktree-remove: ## Remove a worktree (NAME=<name>)
+	@./bin/worktree remove $(NAME)
+
+.PHONY: worktree-cleanup
+worktree-cleanup: ## Remove all worktrees
+	@./bin/worktree cleanup
+
+.PHONY: ports
+ports: ## Show current port assignments
+	@./bin/worktree-ports
+
 # Catch additional arguments
 %:
 	@:

@@ -7,7 +7,8 @@ PROJECT_ROOT="$(cd "$APP_DIR/../.." && pwd)"
 
 export DB_PATH=${DB_PATH:-$PROJECT_ROOT/data/ecs-sandbox.db}
 export SANDBOX_SECRET=${SANDBOX_SECRET:-not-secure}
+export REDIS_URL=${REDIS_URL:-redis://localhost:6379}
 
-echo "[worker] Starting TaskIQ worker"
+echo "[worker] Starting TaskIQ worker (DB=$DB_PATH, Redis=$REDIS_URL)"
 cd "$APP_DIR"
 uv run taskiq worker src.tasks:broker --fs-discover --reload

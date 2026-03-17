@@ -12,6 +12,7 @@ export LISTEN_PORT=${LISTEN_PORT:-8000}
 export DB_PATH=${DB_PATH:-$PROJECT_ROOT/data/ecs-sandbox.db}
 export SANDBOX_SECRET=${SANDBOX_SECRET:-not-secure}
 export SANDBOX_IMAGE=${SANDBOX_IMAGE:-ecs-sandbox-agent:latest}
+export REDIS_URL=${REDIS_URL:-redis://localhost:6379}
 
 # Ensure data directory exists
 mkdir -p "$(dirname "$DB_PATH")"
