@@ -3,7 +3,8 @@
   "private": true,
   "packageManager": "pnpm@9.15.9",
   "scripts": {
-    "dev": "turbo run dev dev:worker dev:scheduler",
+    "dev": "turbo run setup && turbo run dev dev:worker dev:scheduler",
+    "setup": "turbo run setup",
     "build": "turbo run build",
     "test": "turbo run test",
     "fmt": "turbo run fmt",

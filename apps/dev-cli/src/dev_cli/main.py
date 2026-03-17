@@ -13,7 +13,7 @@ from rich.panel import Panel
 
 from dev_cli.agent.deps import AgentDeps
 from dev_cli.agent.spec import build_agent
-from ecs_sandbox import SandboxClient, CreateSessionRequest
+from ecs_sandbox import SandboxClient
 
 console = Console()
 
@@ -34,7 +34,7 @@ async def run_repl(
         # Create a sandbox session
         console.print(f"[dim]Creating sandbox session {sid}...[/dim]")
         try:
-            session = await sandbox.create_session(CreateSessionRequest(id=sid))
+            session = await sandbox.create_session(sid)
             console.print(
                 Panel(
                     f"Session: {session.id}\nStatus: {session.status}",
@@ -69,7 +69,11 @@ async def run_repl(
                 try:
                     events = await sandbox.get_history(sid)
                     for ev in events:
-                        cmd = ev.payload.get("cmd", ev.kind)
+                        cmd = (
+                            ev.payload.get("cmd", ev.kind)
+                            if isinstance(ev.payload, dict)
+                            else ev.kind
+                        )
                         status_color = "green" if ev.status == "done" else "yellow"
                         console.print(
                             f"  [{status_color}][{ev.seq}][/{status_color}] {ev.status}: {cmd}"
@@ -93,7 +97,7 @@ async def run_repl(
                 message_history = result.all_messages()
 
                 console.print()
-                console.print(Markdown(result.data))
+                console.print(Markdown(result.output))
                 console.print()
 
             except KeyboardInterrupt:

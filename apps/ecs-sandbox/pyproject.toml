@@ -16,6 +16,7 @@ dependencies = [
     "taskiq-redis",
     "taskiq-fastapi",
     "python-dotenv",
+    "websockets",
 ]
 
 [dependency-groups]

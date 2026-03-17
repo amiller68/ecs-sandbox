@@ -21,6 +21,12 @@ class SandboxClient:
         self._headers = {"X-Sandbox-Secret": secret}
         self._timeout = timeout
 
+    async def __aenter__(self) -> "SandboxClient":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        pass
+
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             base_url=self.base_url,
@@ -113,15 +119,11 @@ class SandboxClient:
 
     async def read_file(self, session_id: str, path: str) -> dict:
         async with self._client() as client:
-            resp = await client.get(
-                f"/sandbox/{session_id}/fs", params={"path": path}
-            )
+            resp = await client.get(f"/sandbox/{session_id}/fs", params={"path": path})
             resp.raise_for_status()
             return resp.json()
 
-    async def write_file(
-        self, session_id: str, path: str, content_b64: str
-    ) -> dict:
+    async def write_file(self, session_id: str, path: str, content_b64: str) -> dict:
         async with self._client() as client:
             resp = await client.post(
                 f"/sandbox/{session_id}/fs",
@@ -130,9 +132,7 @@ class SandboxClient:
             resp.raise_for_status()
             return resp.json()
 
-    async def list_files(
-        self, session_id: str, path: str = "/workspace"
-    ) -> dict:
+    async def list_files(self, session_id: str, path: str = "/workspace") -> dict:
         async with self._client() as client:
             resp = await client.get(
                 f"/sandbox/{session_id}/fs/list", params={"path": path}

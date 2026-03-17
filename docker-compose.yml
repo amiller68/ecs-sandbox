@@ -11,7 +11,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      SANDBOX_SECRET: ${SANDBOX_SECRET:-dev-secret-change-me-in-prod}
+      SANDBOX_SECRET: ${SANDBOX_SECRET:-not-secure}
       SANDBOX_IMAGE: ecs-sandbox-agent:latest
       DB_PATH: /data/ecs-sandbox.db
       WORKSPACE_BACKEND: efs
@@ -33,7 +33,7 @@ services:
     container_name: ${PROJECT_NAME:-ecs-sandbox}-worker
     command: ["sh", "-c", "cd /app/apps/ecs-sandbox && uv run taskiq worker src.tasks:broker --fs-discover --tasks-pattern '**/tasks/**/*.py'"]
     environment:
-      SANDBOX_SECRET: ${SANDBOX_SECRET:-dev-secret-change-me-in-prod}
+      SANDBOX_SECRET: ${SANDBOX_SECRET:-not-secure}
       DB_PATH: /data/ecs-sandbox.db
       REDIS_URL: redis://redis:6379
       WORKSPACE_BACKEND: efs
@@ -55,7 +55,7 @@ services:
     container_name: ${PROJECT_NAME:-ecs-sandbox}-scheduler
     command: ["sh", "-c", "cd /app/apps/ecs-sandbox && uv run taskiq scheduler src.tasks.scheduler:scheduler"]
     environment:
-      SANDBOX_SECRET: ${SANDBOX_SECRET:-dev-secret-change-me-in-prod}
+      SANDBOX_SECRET: ${SANDBOX_SECRET:-not-secure}
       DB_PATH: /data/ecs-sandbox.db
       REDIS_URL: redis://redis:6379
     depends_on:

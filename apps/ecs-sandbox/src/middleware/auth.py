@@ -11,8 +11,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self.secret = secret
 
     async def dispatch(self, request: Request, call_next):
-        # Skip auth for health check
-        if request.url.path == "/health":
+        # Skip auth for health check and web terminal (WS does its own token check)
+        if request.url.path == "/health" or request.url.path.startswith("/web"):
             return await call_next(request)
 
         provided = request.headers.get("X-Sandbox-Secret")

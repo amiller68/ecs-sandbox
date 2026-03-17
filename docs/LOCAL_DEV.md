@@ -71,43 +71,35 @@ cd apps/ecs-sandbox && make scheduler
 ```bash
 # Create a session
 curl -X POST http://localhost:8000/sandbox \
-  -H "X-Sandbox-Secret: dev-secret-change-me-in-prod" \
+  -H "X-Sandbox-Secret: not-secure" \
   -H "Content-Type: application/json" \
   -d '{"id": "test-session-001", "ttl_seconds": 1800}'
 
 # Run a command
 curl -X POST http://localhost:8000/sandbox/test-session-001/exec \
-  -H "X-Sandbox-Secret: dev-secret-change-me-in-prod" \
+  -H "X-Sandbox-Secret: not-secure" \
   -H "Content-Type: application/json" \
   -d '{"cmd": "echo hello world", "sync": true}'
 
 # Check history
 curl http://localhost:8000/sandbox/test-session-001/history \
-  -H "X-Sandbox-Secret: dev-secret-change-me-in-prod"
+  -H "X-Sandbox-Secret: not-secure"
 
 # Destroy session
 curl -X DELETE http://localhost:8000/sandbox/test-session-001 \
-  -H "X-Sandbox-Secret: dev-secret-change-me-in-prod"
+  -H "X-Sandbox-Secret: not-secure"
 ```
 
-### With the Dev CLI
+### With the Web Terminal
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# Interactive chat with the agent
-uv run dev-cli chat "Write a Python script that counts words in a file"
-
-# Or run a single command
-uv run dev-cli exec test-session-001 "ls -la /workspace"
-```
+Open http://localhost:8000/web in a browser. Enter a session ID and `not-secure` as the token, then click Connect.
 
 ## Environment Variables
 
 For local development, the Docker Compose file sets all required variables. If running outside Docker:
 
 ```bash
-export SANDBOX_SECRET=dev-secret-change-me-in-prod
+export SANDBOX_SECRET=not-secure
 export SANDBOX_IMAGE=ecs-sandbox-agent:latest
 export DB_PATH=/tmp/ecs-sandbox.db
 export WORKSPACE_BACKEND=none          # or 'efs' if you have a local mount

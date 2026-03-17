@@ -1,0 +1,13 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1e1e1e; color: #d4d4d4; font-family: system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+#connect-form { padding: 12px 16px; background: #252526; display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+#connect-form input { background: #3c3c3c; border: 1px solid #555; color: #d4d4d4; padding: 6px 10px; border-radius: 4px; font-size: 14px; }
+#connect-form input:first-child { width: 320px; }
+#connect-form input:nth-child(2) { width: 200px; }
+#connect-form button { background: #0e639c; color: #fff; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+#connect-form button:hover { background: #1177bb; }
+#status { padding: 0 12px; font-size: 12px; }
+#status.connected { color: #4ec9b0; }
+#status.disconnected { color: #f44747; }
+#status.error { color: #f44747; }
+#terminal-container { flex: 1; padding: 4px; }

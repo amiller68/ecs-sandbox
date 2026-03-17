@@ -1,130 +1,90 @@
-"""Docker container lifecycle management via aiodocker."""
+"""Docker container lifecycle management."""
 
-from __future__ import annotations
+import time
 
-import os
-
-import aiodocker
-
-from src.config import Config
+import docker
+from docker.errors import NotFound
 
 
 class DockerManager:
-    """Manages sandbox container creation, exec, and teardown."""
-
-    def __init__(self, config: Config):
+    def __init__(self, config):
         self.config = config
-        self._docker: aiodocker.Docker | None = None
+        self._client: docker.DockerClient | None = None
 
-    async def connect(self) -> None:
-        self._docker = aiodocker.Docker()
+    async def connect(self):
+        self._client = docker.from_env()
 
-    async def close(self) -> None:
-        if self._docker:
-            await self._docker.close()
+    def _docker(self) -> docker.DockerClient:
+        assert self._client is not None, "DockerManager not connected"
+        return self._client
 
-    @property
-    def docker(self) -> aiodocker.Docker:
-        assert self._docker is not None, "DockerManager not connected"
-        return self._docker
+    async def close(self):
+        if self._client:
+            self._client.close()
 
     async def create_container(
         self,
         session_id: str,
-        image: str | None = None,
-        workspace_path: str | None = None,
-    ) -> tuple[str, str]:
-        """Create and start a sandbox container.
-
-        Returns (container_id, container_ip).
-        """
-        image = image or self.config.sandbox_image
-
-        host_config: dict = {
-            "Memory": _parse_memory(self.config.sandbox_memory_limit),
-            "NanoCpus": int(float(self.config.sandbox_cpu_limit) * 1e9),
-            "PidsLimit": self.config.sandbox_pids_limit,
-        }
-
-        binds = []
-        if workspace_path:
-            os.makedirs(workspace_path, exist_ok=True)
-            binds.append(f"{workspace_path}:/workspace")
-            host_config["Binds"] = binds
-
-        container_config = {
-            "Image": image,
-            "Labels": {"ecs-sandbox.session_id": session_id},
-            "ExposedPorts": {"2222/tcp": {}},
-            "HostConfig": {
-                **host_config,
-                "PublishAllPorts": True,
-            },
-        }
-
-        container = await self.docker.containers.create_or_replace(
+        image: str,
+        memory_limit: str = "512m",
+        cpu_limit: str = "0.5",
+        pids_limit: int = 128,
+    ) -> dict:
+        """Create and start a sandbox container."""
+        # On macOS, Docker bridge IPs aren't routable from the host.
+        # Use published ports so the control plane can always reach the agent.
+        container = self._docker().containers.run(
+            image,
+            detach=True,
             name=f"sandbox-{session_id[:12]}",
-            config=container_config,
+            labels={"ecs-sandbox.session_id": session_id},
+            mem_limit=memory_limit,
+            pids_limit=pids_limit,
+            ports={"2222/tcp": None},  # random host port
+            remove=False,
         )
-        await container.start()
-
-        # Get the container IP
-        info = await container.show()
-        container_id = info["Id"]
-
-        # Try bridge network first, fall back to first available
-        networks = info.get("NetworkSettings", {}).get("Networks", {})
-        container_ip = "127.0.0.1"
-        for net_name, net_info in networks.items():
-            ip = net_info.get("IPAddress")
-            if ip:
-                container_ip = ip
+        # Wait for port binding to appear (takes ~500ms on Docker Desktop)
+        binding = []
+        for _ in range(20):
+            container.reload()
+            binding = (
+                container.attrs.get("NetworkSettings", {})
+                .get("Ports", {})
+                .get("2222/tcp")
+                or []
+            )
+            if binding:
                 break
+            time.sleep(0.25)
 
-        # If no network IP, get the mapped port on host
-        if container_ip == "127.0.0.1":
-            ports = info.get("NetworkSettings", {}).get("Ports", {})
-            port_bindings = ports.get("2222/tcp", [])
-            if port_bindings:
-                host_port = port_bindings[0].get("HostPort", "2222")
-                container_ip = f"127.0.0.1:{host_port}"
+        if binding:
+            host_port = binding[0]["HostPort"]
+            ip = f"127.0.0.1:{host_port}"
+        else:
+            ip = container.attrs["NetworkSettings"]["IPAddress"] + ":2222"
 
-        return container_id, container_ip
+        print(f"[docker] container {session_id[:12]} → {ip}")
+        return {"container_id": container.id, "container_ip": ip}
 
-    async def stop_container(self, container_id: str) -> None:
+    async def remove_container(self, container_id: str):
         """Stop and remove a container."""
         try:
-            container = self.docker.containers.container(container_id)
-            await container.stop()
-            await container.delete(force=True)
-        except aiodocker.exceptions.DockerError:
-            pass  # Already stopped/removed
+            container = self._docker().containers.get(container_id)
+            container.stop(timeout=10)
+            container.remove()
+        except NotFound:
+            pass
 
     async def list_sandbox_containers(self) -> list[dict]:
-        """List all running containers with ecs-sandbox labels."""
-        containers = await self.docker.containers.list(
-            filters={"label": ["ecs-sandbox.session_id"]}
+        """List all running sandbox containers."""
+        containers = self._docker().containers.list(
+            filters={"label": "ecs-sandbox.session_id"}
         )
-        result = []
-        for c in containers:
-            info = await c.show()
-            labels = info.get("Config", {}).get("Labels", {})
-            result.append(
-                {
-                    "container_id": info["Id"],
-                    "session_id": labels.get("ecs-sandbox.session_id"),
-                }
-            )
-        return result
-
-
-def _parse_memory(mem_str: str) -> int:
-    """Convert memory string like '512m' to bytes."""
-    mem_str = mem_str.strip().lower()
-    if mem_str.endswith("g"):
-        return int(float(mem_str[:-1]) * 1024 * 1024 * 1024)
-    if mem_str.endswith("m"):
-        return int(float(mem_str[:-1]) * 1024 * 1024)
-    if mem_str.endswith("k"):
-        return int(float(mem_str[:-1]) * 1024)
-    return int(mem_str)
+        return [
+            {
+                "container_id": c.id,
+                "session_id": c.labels.get("ecs-sandbox.session_id"),
+                "status": c.status,
+            }
+            for c in containers
+        ]

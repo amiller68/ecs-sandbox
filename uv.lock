@@ -569,6 +569,7 @@ dependencies = [
     { name = "taskiq-fastapi" },
     { name = "taskiq-redis" },
     { name = "uvicorn" },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -595,6 +596,7 @@ requires-dist = [
     { name = "taskiq-fastapi" },
     { name = "taskiq-redis" },
     { name = "uvicorn" },
+    { name = "websockets" },
 ]
 
 [package.metadata.requires-dev]
@@ -616,10 +618,26 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "black" },
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "fastapi" },
     { name = "uvicorn" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "black" },
+    { name = "pytest", specifier = ">=8.3.5" },
+    { name = "ruff" },
+    { name = "ty" },
 ]
 
 [[package]]

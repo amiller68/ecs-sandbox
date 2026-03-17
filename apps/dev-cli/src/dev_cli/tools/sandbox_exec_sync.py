@@ -7,7 +7,6 @@ import asyncio
 from pydantic_ai import RunContext
 
 from dev_cli.agent.deps import AgentDeps
-from ecs_sandbox import ExecRequest
 
 
 async def sandbox_exec_sync(
@@ -29,14 +28,17 @@ async def sandbox_exec_sync(
     timeout_seconds = min(timeout_seconds, 30)
     resp = await ctx.deps.sandbox.exec(
         ctx.deps.session_id,
-        ExecRequest(cmd=cmd, cwd=cwd, timeout_seconds=timeout_seconds, sync=True),
+        cmd=cmd,
+        cwd=cwd,
+        timeout_seconds=timeout_seconds,
+        sync=True,
     )
 
     # Poll for completion
     for _ in range(timeout_seconds * 2):
         event = await ctx.deps.sandbox.get_event(ctx.deps.session_id, resp.seq)
         if event.status in ("done", "error"):
-            result = event.result or {}
+            result = event.result if isinstance(event.result, dict) else {}
             stdout = result.get("stdout", "")
             stderr = result.get("stderr", "")
             exit_code = result.get("exit_code", -1)

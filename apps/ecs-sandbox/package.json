@@ -2,6 +2,7 @@
   "name": "@ecs-sandbox/ecs-sandbox",
   "private": true,
   "scripts": {
+    "setup": "make setup",
     "dev": "./bin/dev.sh",
     "dev:worker": "./bin/worker.sh",
     "dev:scheduler": "./bin/scheduler.sh",

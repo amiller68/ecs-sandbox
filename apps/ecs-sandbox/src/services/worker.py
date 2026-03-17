@@ -1,119 +1,118 @@
-"""Per-session async command execution worker."""
-
-from __future__ import annotations
+"""Per-session asyncio queue and executor for command execution."""
 
 import asyncio
+import json
 import time
 
 import httpx
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from src.db import queries
+import sqlalchemy
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 
 class SessionWorker:
-    """Manages per-session command queues and sequential execution."""
+    """Manages per-session command execution queues."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
-        self._session_factory = session_factory
-        self._queues: dict[str, asyncio.Queue] = {}
+    def __init__(self, session_factory: async_sessionmaker):
+        self._sf = session_factory
         self._tasks: dict[str, asyncio.Task] = {}
+        self._queues: dict[str, asyncio.Queue] = {}
 
-    def submit(self, session_id: str, seq: int, container_ip: str) -> None:
-        """Enqueue a command for execution."""
+    def submit(self, session_id: str, seq: int, container_ip: str):
+        """Submit a command for async execution."""
         if session_id not in self._queues:
             self._queues[session_id] = asyncio.Queue()
-            self._tasks[session_id] = asyncio.create_task(self._worker_loop(session_id))
+            self._tasks[session_id] = asyncio.create_task(self._worker(session_id))
         self._queues[session_id].put_nowait((seq, container_ip))
 
-    async def stop_session(self, session_id: str) -> None:
+    async def _worker(self, session_id: str):
+        """Process commands sequentially for a session."""
+        queue = self._queues[session_id]
+        while True:
+            seq, container_ip = await queue.get()
+            try:
+                await self._process(session_id, seq, container_ip)
+            except Exception as e:
+                print(f"Error processing seq {seq} for {session_id}: {e}")
+            finally:
+                queue.task_done()
+
+    async def _process(self, session_id: str, seq: int, container_ip: str):
+        """Execute a command via the sidecar agent."""
+        async with self._sf() as db:
+            # Get event payload
+            result = await db.execute(
+                sqlalchemy.text(
+                    "SELECT payload FROM events WHERE session_id = :sid AND seq = :seq"
+                ),
+                {"sid": session_id, "seq": seq},
+            )
+            row = result.first()
+            if not row:
+                return
+
+            payload = (
+                json.loads(row.payload) if isinstance(row.payload, str) else row.payload
+            )
+
+            # Update status to running
+            await db.execute(
+                sqlalchemy.text(
+                    "UPDATE events SET status = 'running' WHERE session_id = :sid AND seq = :seq"
+                ),
+                {"sid": session_id, "seq": seq},
+            )
+            await db.commit()
+
+        # Execute via sidecar
+        url = (
+            f"http://{container_ip}:2222"
+            if ":" not in container_ip
+            else f"http://{container_ip}"
+        )
+        try:
+            async with httpx.AsyncClient(
+                timeout=payload.get("timeout_seconds", 300)
+            ) as client:
+                resp = await client.post(f"{url}/exec", json=payload)
+                exec_result = resp.json()
+        except Exception as e:
+            exec_result = {
+                "stdout": "",
+                "stderr": str(e),
+                "exit_code": 1,
+                "duration_ms": 0,
+            }
+
+        # Write result back
+        now = int(time.time() * 1000)
+        async with self._sf() as db:
+            await db.execute(
+                sqlalchemy.text(
+                    """UPDATE events SET status = :status, result = :result, completed_at = :now
+                    WHERE session_id = :sid AND seq = :seq"""
+                ),
+                {
+                    "status": (
+                        "done" if exec_result.get("exit_code", 1) == 0 else "error"
+                    ),
+                    "result": json.dumps(exec_result),
+                    "now": now,
+                    "sid": session_id,
+                    "seq": seq,
+                },
+            )
+            await db.commit()
+
+    async def stop_session(self, session_id: str):
         """Stop the worker for a session."""
         if session_id in self._tasks:
             self._tasks[session_id].cancel()
             del self._tasks[session_id]
         self._queues.pop(session_id, None)
 
-    async def stop_all(self) -> None:
-        """Stop all workers."""
+    async def stop_all(self):
+        """Stop all session workers."""
         for task in self._tasks.values():
             task.cancel()
         self._tasks.clear()
         self._queues.clear()
-
-    async def _worker_loop(self, session_id: str) -> None:
-        """Process commands sequentially for a session."""
-        queue = self._queues[session_id]
-        while True:
-            try:
-                seq, container_ip = await queue.get()
-                await self._execute(session_id, seq, container_ip)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                # Log and continue — don't let one bad command kill the worker
-                print(f"Worker error for session {session_id} seq {seq}: {e}")
-
-    async def _execute(self, session_id: str, seq: int, container_ip: str) -> None:
-        """Execute a single command inside the container via the sidecar agent."""
-        async with self._session_factory() as db:
-            event = await queries.get_event(db, session_id=session_id, seq=seq)
-            if not event:
-                return
-
-            payload = event["payload"]
-            cmd = payload.get("cmd", "")
-            cwd = payload.get("cwd", "/workspace")
-            timeout = payload.get("timeout_seconds", 300)
-            env = payload.get("env")
-
-            # Mark running
-            await queries.complete_event(
-                db,
-                session_id=session_id,
-                seq=seq,
-                status="running",
-                result={},
-            )
-
-            # Resolve sidecar URL
-            if ":" in container_ip:
-                sidecar_url = f"http://{container_ip}"
-            else:
-                sidecar_url = f"http://{container_ip}:2222"
-
-            start = time.time()
-            try:
-                async with httpx.AsyncClient(timeout=timeout + 5) as client:
-                    resp = await client.post(
-                        f"{sidecar_url}/exec",
-                        json={
-                            "cmd": cmd,
-                            "cwd": cwd,
-                            "timeout_seconds": timeout,
-                            "env": env,
-                        },
-                    )
-                    result_data = resp.json()
-                    result_data["duration_ms"] = int((time.time() - start) * 1000)
-
-                    await queries.complete_event(
-                        db,
-                        session_id=session_id,
-                        seq=seq,
-                        status="done",
-                        result=result_data,
-                    )
-            except Exception as e:
-                duration_ms = int((time.time() - start) * 1000)
-                await queries.complete_event(
-                    db,
-                    session_id=session_id,
-                    seq=seq,
-                    status="error",
-                    result={
-                        "stdout": "",
-                        "stderr": str(e),
-                        "exit_code": -1,
-                        "duration_ms": duration_ms,
-                    },
-                )

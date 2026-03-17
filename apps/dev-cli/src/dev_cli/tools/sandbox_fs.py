@@ -7,7 +7,6 @@ import base64
 from pydantic_ai import RunContext
 
 from dev_cli.agent.deps import AgentDeps
-from ecs_sandbox import FileWriteRequest
 
 
 async def sandbox_read_file(
@@ -20,8 +19,8 @@ async def sandbox_read_file(
         path: Absolute path inside the sandbox (e.g. /workspace/main.py).
     """
     try:
-        content = await ctx.deps.sandbox.read_file(ctx.deps.session_id, path)
-        return content
+        result = await ctx.deps.sandbox.read_file(ctx.deps.session_id, path)
+        return str(result.get("content", result))
     except Exception as e:
         return f"Error reading {path}: {e}"
 
@@ -39,10 +38,7 @@ async def sandbox_write_file(
     """
     try:
         content_b64 = base64.b64encode(content.encode()).decode()
-        await ctx.deps.sandbox.write_file(
-            ctx.deps.session_id,
-            FileWriteRequest(path=path, content_b64=content_b64),
-        )
+        await ctx.deps.sandbox.write_file(ctx.deps.session_id, path, content_b64)
         return f"Written {len(content)} bytes to {path}"
     except Exception as e:
         return f"Error writing {path}: {e}"
@@ -58,14 +54,21 @@ async def sandbox_list_files(
         path: Directory path to list (default: /workspace).
     """
     try:
-        entries = await ctx.deps.sandbox.list_files(ctx.deps.session_id, path)
+        result = await ctx.deps.sandbox.list_files(ctx.deps.session_id, path)
+        entries = result.get("entries", []) if isinstance(result, dict) else result
         if not entries:
             return f"{path} is empty"
         lines = []
         for e in entries:
-            prefix = "d" if e.is_dir else "f"
-            size = f" ({e.size}b)" if e.size is not None else ""
-            lines.append(f"  [{prefix}] {e.name}{size}")
+            if isinstance(e, dict):
+                prefix = "d" if e.get("is_dir") else "f"
+                name = e.get("name", "?")
+                size = f" ({e['size']}b)" if e.get("size") is not None else ""
+            else:
+                prefix = "f"
+                name = str(e)
+                size = ""
+            lines.append(f"  [{prefix}] {name}{size}")
         return f"Contents of {path}:\n" + "\n".join(lines)
     except Exception as e:
         return f"Error listing {path}: {e}"

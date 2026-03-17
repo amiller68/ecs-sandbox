@@ -1,4 +1,4 @@
-PROJECTS := apps/ecs-sandbox apps/ecs-sandbox-agent packages/ecs-sandbox-client
+PROJECTS := apps/ecs-sandbox apps/ecs-sandbox-agent apps/dev-cli packages/ecs-sandbox-client
 
 .PHONY: help
 help: ## Show this help message
@@ -29,10 +29,19 @@ run-for:
 .PHONY: install
 install: ## Install dependencies for all projects
 	@uv sync --all-packages
+	@pnpm install
+
+.PHONY: setup
+setup: ## Start local dev services (Redis)
+	@$(MAKE) -C apps/ecs-sandbox setup
+
+.PHONY: teardown
+teardown: ## Stop local dev services
+	@$(MAKE) -C apps/ecs-sandbox teardown
 
 .PHONY: dev
-dev: ## Run all development servers in tmux (use ARGS="--kill" to kill session)
-	@./bin/dev $(ARGS)
+dev: ## Run dev server + worker + scheduler via turbo
+	@pnpm dev
 
 .PHONY: check
 check: ## Check all projects

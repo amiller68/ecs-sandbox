@@ -5,7 +5,6 @@ from __future__ import annotations
 from pydantic_ai import RunContext
 
 from dev_cli.agent.deps import AgentDeps
-from ecs_sandbox import ExecRequest
 
 
 async def sandbox_exec(
@@ -27,6 +26,8 @@ async def sandbox_exec(
     """
     resp = await ctx.deps.sandbox.exec(
         ctx.deps.session_id,
-        ExecRequest(cmd=cmd, cwd=cwd, timeout_seconds=timeout_seconds),
+        cmd=cmd,
+        cwd=cwd,
+        timeout_seconds=timeout_seconds,
     )
     return f"Command submitted. seq={resp.seq}, status={resp.status}. Use sandbox history to check results."

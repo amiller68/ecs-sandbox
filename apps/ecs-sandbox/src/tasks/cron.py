@@ -1,13 +1,15 @@
 """
-Declarative cron tasks with distributed locking.
+Declarative cron tasks with distributed Redis locking.
+
+Single-instance deployment — the lock prevents overlapping runs if a previous
+invocation is still in progress. If you scale to multiple instances, the same
+lock ensures only one instance runs each cron tick.
 
 Usage:
     from src.tasks.cron import cron
 
-    @cron("*/5 * * * *", lock_ttl=120)
-    async def my_periodic_task(
-        redis: Redis = TaskiqDepends(get_redis),
-    ) -> dict:
+    @cron("*/5 * * * *")
+    async def my_periodic_task() -> dict:
         return {"result": "done"}
 """
 
@@ -17,6 +19,8 @@ from typing import Any, Callable
 
 from redis.asyncio import Redis
 from taskiq import TaskiqDepends
+
+from src.tasks.deps import get_redis
 
 _cron_registry: dict[str, "CronConfig"] = {}
 
@@ -44,12 +48,9 @@ class TaskLock:
         await self._redis.delete(key)
 
 
-def get_redis(request=TaskiqDepends()) -> Redis:
-    """Get Redis client from FastAPI app state."""
-    return request.app.state.redis
-
-
 def cron(expression: str, lock_ttl: int = 300) -> Callable[..., Any]:
+    """Register a function as a scheduled cron task with distributed locking."""
+
     def decorator(func: Any) -> Any:
         task_name = func.__name__
 
@@ -71,11 +72,11 @@ def cron(expression: str, lock_ttl: int = 300) -> Callable[..., Any]:
 
             try:
                 result = await func(*args, **kwargs)
-                result_dict = result if isinstance(result, dict) else {"result": result}
-                return result_dict
+                return result if isinstance(result, dict) else {"result": result}
             finally:
                 await lock.release(task_name)
 
+        # Merge the original function's signature with the injected cron params
         orig_sig = inspect.signature(func)
         wrapper_sig = inspect.signature(wrapper)
         cron_params = {
@@ -84,15 +85,14 @@ def cron(expression: str, lock_ttl: int = 300) -> Callable[..., Any]:
         combined_params = list(orig_sig.parameters.values()) + list(
             cron_params.values()
         )
-        wrapper.__signature__ = orig_sig.replace(parameters=combined_params)
+        wrapper.__signature__ = orig_sig.replace(parameters=combined_params)  # type: ignore[attr-defined]
         wrapper.__name__ = func.__name__
         wrapper.__qualname__ = func.__qualname__
         wrapper.__module__ = func.__module__
 
         from src.tasks import broker
 
-        decorated_task = broker.task(schedule=[{"cron": expression}])(wrapper)
-        return decorated_task
+        return broker.task(schedule=[{"cron": expression}])(wrapper)
 
     return decorator
 

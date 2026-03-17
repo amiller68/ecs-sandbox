@@ -4,6 +4,17 @@ help: ## Show this help message
 	@echo ''
 	@awk 'BEGIN {FS = ":.*##"; printf "\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  %-20s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
+PROJECT_ROOT := $(shell cd ../.. && pwd)
+
+.PHONY: setup
+setup: ## Start Redis container for background jobs
+	@$(PROJECT_ROOT)/bin/redis.sh up
+	@mkdir -p $(PROJECT_ROOT)/data
+
+.PHONY: teardown
+teardown: ## Stop Redis container
+	@$(PROJECT_ROOT)/bin/redis.sh down
+
 .PHONY: dev
 dev: ## Run development server
 	@./bin/dev.sh

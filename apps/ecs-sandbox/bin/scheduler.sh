@@ -6,7 +6,7 @@ APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECT_ROOT="$(cd "$APP_DIR/../.." && pwd)"
 
 export DB_PATH=${DB_PATH:-$PROJECT_ROOT/data/ecs-sandbox.db}
-export SANDBOX_SECRET=${SANDBOX_SECRET:-dev-secret-change-me-in-prod}
+export SANDBOX_SECRET=${SANDBOX_SECRET:-not-secure}
 
 echo "[scheduler] Starting TaskIQ scheduler"
 cd "$APP_DIR"

@@ -1,8 +1,11 @@
 """FastAPI application factory."""
 
+import pathlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from redis.asyncio import Redis
 
 from src.config import Config
 from src.db.connection import get_engine, get_session_factory, apply_migrations
@@ -19,8 +22,14 @@ async def lifespan(app: FastAPI):
     # Database
     engine = get_engine(config.db_path)
     app.state.engine = engine
+    app.state.session_factory = get_session_factory(engine)
     await apply_migrations(config.db_path)
     print("Database ready")
+
+    # Redis (for background job dependencies)
+    redis = Redis.from_url(config.redis_url, decode_responses=True)
+    app.state.redis = redis
+    print("Redis connected")
 
     # Docker manager
     docker = DockerManager(config)
@@ -39,6 +48,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     await worker.stop_all()
     await docker.close()
+    await redis.close()
     await engine.dispose()
 
 
@@ -53,14 +63,19 @@ def create_app(config: Config) -> FastAPI:
     app.state.config = config
 
     # Middleware
-    app.add_middleware(AuthMiddleware, secret=config.sandbox_secret)
+    app.add_middleware(AuthMiddleware, secret=config.sandbox_secret)  # type: ignore[arg-type]
 
     # Routers
-    from src.routers import sandbox, fs, git
+    from src.routers import sandbox, fs, git, web
 
     app.include_router(sandbox.router)
     app.include_router(fs.router)
     app.include_router(git.router)
+    app.include_router(web.router)
+
+    # Static files for web terminal
+    static_dir = pathlib.Path(__file__).parent / "static"
+    app.mount("/web/static", StaticFiles(directory=static_dir), name="web-static")
 
     @app.get("/health")
     async def health():
