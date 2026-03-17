@@ -17,6 +17,7 @@ make types                # Type check all code (ty)
 make teardown             # Stop local dev services
 make docker-up            # Start docker-compose stack with vault secrets
 make docker-down          # Stop docker-compose stack
+make ports                # Show current port assignments
 ```
 
 ## Project Structure
@@ -29,7 +30,7 @@ apps/
 packages/
   ecs-sandbox-client/      # Typed Python client library (httpx + pydantic)
 iac/                       # Terraform (ECS, EFS, ECR, networking)
-bin/                       # Dev and deploy scripts (dev, vault, iac, tfc, ecs, docker)
+bin/                       # Dev and deploy scripts (dev, worktree-ports, vault, etc.)
 docs/                      # Architecture, patterns, and dev guides
 issues/                    # File-based issue tracking
 ```

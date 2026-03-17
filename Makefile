@@ -135,6 +135,10 @@ deploy: ## Deploy all services - usage: make deploy <stage>
 	@STAGE=$(word 2,$(MAKECMDGOALS)); \
 	./bin/vault run -- ./bin/ecs deploy $$STAGE ecs-sandbox --wait
 
+.PHONY: ports
+ports: ## Show current port assignments
+	@./bin/worktree-ports
+
 # Catch additional arguments
 %:
 	@:
