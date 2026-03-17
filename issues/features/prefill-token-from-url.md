@@ -1,6 +1,6 @@
 # Pre-fill token from URL query param
 
-**Status:** Planned
+**Status:** Complete
 **Labels:** web-terminal, dx, auto
 
 ## Objective
