@@ -10,6 +10,7 @@ auto = true
 
 # Issues configuration
 [issues]
+auto_spawn = true
 spawn_labels = ["auto"]
 
 # Agent configuration
