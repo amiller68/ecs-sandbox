@@ -1,49 +1,6 @@
 # Coding Patterns
 
-## Python Conventions
-
-### Formatting & Linting
-
-- **Formatter:** Black (default config)
-- **Linter:** Ruff
-- **Type checker:** ty
-- **Always** use `make` targets or `uv run` — never run tools directly
-
-### Module Organization
-
-```
-apps/ecs-sandbox/src/
-├── main.py                  # App entry, startup, mount routers
-├── config.py                # Pydantic Settings, env var loading
-├── routers/                 # FastAPI routers (one per domain)
-│   ├── sandbox.py           # Session CRUD + exec routes
-│   ├── fs.py                # Filesystem operations
-│   └── git.py               # Git operations
-├── services/                # Business logic
-│   ├── session.py           # Session lifecycle, TTL refresh
-│   ├── docker_manager.py    # Container create/exec/destroy
-│   ├── worker.py            # Async queue + per-session executor
-│   └── cleanup.py           # Reaper logic
-├── middleware/
-│   └── auth.py              # X-Sandbox-Secret check
-├── db/
-│   ├── connection.py        # aiosqlite setup, pragma application
-│   ├── migrations/          # Plain SQL migration files
-│   └── queries.py           # Typed query helpers
-└── storage/
-    ├── efs.py
-    └── s3.py
-```
-
-### Naming
-
-- **Files and modules:** `snake_case`
-- **Classes:** `PascalCase`
-- **Functions and variables:** `snake_case`
-- **Constants:** `UPPER_SNAKE_CASE`
-- **Pydantic models:** `PascalCase` with descriptive suffixes (`CreateSessionRequest`, `ExecResult`)
-
-### Error Handling
+## Error Handling
 
 Use `HTTPException` for API errors with consistent error bodies:
 
@@ -56,35 +13,84 @@ raise HTTPException(
 )
 ```
 
-### Async Patterns
+Custom exception classes for domain errors (e.g. `SessionConflictError`, `SessionCapacityError`) are raised by services and caught by routers to map to HTTP status codes.
 
-- All database access via `aiosqlite` (async)
-- Per-session `asyncio.Lock` for mutating operations (container start/stop)
-- Per-session `asyncio.Queue` for command dispatch
-- Use `asyncio.TaskGroup` for structured concurrency where appropriate
+## Module Organization
 
-### Configuration
-
-Use Pydantic Settings for environment variable loading:
-
-```python
-from pydantic_settings import BaseSettings
-
-class Settings(BaseSettings):
-    sandbox_secret: str
-    sandbox_image: str = "ecs-sandbox-agent:latest"
-    db_path: str = "/data/ecs-sandbox.db"
-    max_containers: int = 50
-    default_ttl_seconds: int = 1800
+```
+apps/ecs-sandbox/src/
+├── server.py                # App factory, lifespan, router mounting
+├── config.py                # Pydantic-style config, env var loading
+├── __main__.py              # Entry point (uvicorn runner)
+├── routers/                 # FastAPI routers (one per domain)
+│   ├── _deps.py             # context_from_request() — builds Context from Request
+│   ├── sandbox.py           # Session CRUD + exec routes
+│   ├── fs.py                # Filesystem operations (proxied to sidecar)
+│   ├── git.py               # Git operations (async via worker)
+│   └── web.py               # Browser terminal (HTML + WebSocket)
+├── services/                # Business logic
+│   ├── _context.py          # Context dataclass (db, docker, config, worker)
+│   ├── session.py           # Session lifecycle (create, destroy, TTL refresh)
+│   ├── docker_manager.py    # Container create/exec/destroy via Docker SDK
+│   ├── worker.py            # Per-session asyncio queue + executor
+│   └── cleanup.py           # Reaper logic
+├── middleware/
+│   └── auth.py              # X-Sandbox-Secret validation
+├── db/
+│   ├── connection.py        # SQLAlchemy async engine setup
+│   ├── migrations/          # Plain SQL migration files
+│   └── queries.py           # Typed query helpers
+├── storage/
+│   ├── efs.py               # EFS workspace backend
+│   └── s3.py                # S3 workspace backend
+├── tasks/                   # Background jobs (Taskiq)
+│   ├── __init__.py          # Broker initialization
+│   ├── cron.py              # @cron decorator with Redis distributed locking
+│   ├── scheduler.py         # TaskiqScheduler setup
+│   ├── deps.py              # Taskiq dependency injection (db, redis)
+│   └── jobs/
+│       └── cleanup.py       # Cron jobs: reap_stale_sessions, prune_old_events
+└── static/                  # Web terminal UI assets
 ```
 
-### Testing
+### Dependency Injection
+
+Routers use `context_from_request()` to build a `Context` dataclass from the FastAPI `Request`:
+
+```python
+from src.routers._deps import context_from_request
+
+@router.post("/sandbox")
+async def create(body: CreateSessionBody, request: Request, db: AsyncSession = Depends(get_db)):
+    ctx = context_from_request(request, db)
+    return await create_session(CreateParams(...), ctx)
+```
+
+Services accept `(params, ctx: Context)` — parameters first, context second.
+
+## Naming Conventions
+
+- **Files and modules:** `snake_case`
+- **Classes:** `PascalCase`
+- **Functions and variables:** `snake_case`
+- **Constants:** `UPPER_SNAKE_CASE`
+- **Pydantic models:** `PascalCase` with descriptive suffixes (`CreateSessionBody`, `ExecBody`, `WriteFileBody`)
+- **Internal modules:** Prefixed with `_` (`_deps.py`, `_context.py`)
+
+## Output Conventions
+
+- **API responses:** JSON with consistent structure
+- **Error responses:** `{"error": "error_code", "detail": "human-readable message"}`
+- **Async operations:** Return `202 Accepted` with event/sequence tracking
+- **Logging:** Standard Python logging via uvicorn
+
+## Testing Patterns
 
 - **Framework:** pytest + pytest-asyncio
 - **Location:** `tests/` directory at the app level
 - **Fixtures:** Use `conftest.py` for shared fixtures
 - **Async tests:** Use `@pytest.mark.asyncio` decorator
-- **No mocks for SQLite** — use an in-memory database for tests
+- **No mocks for SQLite** — use an in-memory database
 
 ```python
 @pytest.fixture
@@ -95,46 +101,37 @@ async def db():
         yield conn
 ```
 
-### Dependencies
+## Common Idioms
 
-- Pin major versions in `pyproject.toml`: `"fastapi>=0.115,<1"`
-- Use `uv` workspace for internal dependencies: `ecs-sandbox-client = { workspace = true }`
+### Async Patterns
 
-## Background Jobs
+- All database access via SQLAlchemy async sessions
+- Per-session `asyncio.Lock` for mutating operations (container start/stop)
+- Per-session `asyncio.Queue` for command dispatch via `SessionWorker`
+- Use `asyncio.TaskGroup` for structured concurrency where appropriate
 
-### Taskiq Pattern
+### Background Jobs
+
+Cron tasks use the `@cron` decorator with Redis distributed locking:
 
 ```python
-from taskiq import InMemoryBroker
-from taskiq_redis import RedisAsyncResultBackend, ListQueueBroker
-
-broker = ListQueueBroker(url="redis://localhost:6379")
-
-@broker.task
-async def cleanup_stale_sessions():
+@cron("*/10 * * * *", lock_ttl=300)
+async def reap_stale_sessions() -> dict:
     """Reap sessions past their TTL."""
     ...
 ```
 
-### Scheduler
+### Configuration
 
-Cron tasks are defined in the scheduler module and triggered via Taskiq's scheduler:
-
-```python
-from taskiq import TaskiqScheduler
-
-scheduler = TaskiqScheduler(broker=broker, sources=[...])
-```
+Environment variables loaded via a `Config` dataclass in `config.py`. Key settings: `sandbox_secret`, `sandbox_image`, `db_path`, `redis_url`, `max_containers`, `default_ttl_seconds`.
 
 ## Git Conventions
 
 ### Commit Format
 
-Conventional Commits:
+Conventional Commits: `<type>(<scope>): <summary>`
 
 ```
-<type>(<scope>): <summary>
-
 feat(api): add sync exec mode with 30s timeout
 fix(cleanup): handle orphan containers without session rows
 docs: add deployment guide
@@ -143,9 +140,8 @@ chore(iac): update ECS task definition memory limits
 
 ### Types
 
-- `feat` — new feature
-- `fix` — bug fix
-- `docs` — documentation only
-- `chore` — tooling, CI, dependencies
-- `refactor` — code change that neither fixes a bug nor adds a feature
-- `test` — adding or updating tests
+`feat`, `fix`, `docs`, `chore`, `refactor`, `test`
+
+### Scopes
+
+`api`, `cli`, `client`, `agent`, `iac`, `cleanup`, `worker`, `web`

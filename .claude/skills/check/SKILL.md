@@ -1,34 +1,27 @@
-# check
+---
+description: Run project checks (build, test, lint, format). Use when validating code quality, preparing for merge, or verifying changes pass CI.
+allowed-tools:
+  - Bash(make:*)
+  - Bash(uv:*)
+  - Bash(cat:*)
+  - Bash(ls:*)
+  - Read
+  - Glob
+  - Grep
+---
 
-Run all CI checks across the monorepo.
-
-## When to use
-
-- Before committing or opening a PR
-- After making changes to validate nothing is broken
-- When asked to "check", "validate", or "verify" the code
+Run the full success criteria checks to validate code quality.
 
 ## Steps
 
-1. Run `make check` from the repo root
-2. This runs `fmt-check`, `lint`, `types`, and `test` across all projects
-3. If any check fails, fix the issue and re-run
+1. Run `make check` from the repo root. This runs fmt-check, lint, types, and test across all projects.
 
-## Per-project checks
+2. If formatting checks fail, auto-fix with `make fmt`, then re-run `make check`.
 
-If you only changed one project, you can run checks for just that project:
+3. If lint errors are auto-fixable, run `uv run ruff check --fix .` from the affected project directory, then re-run `make check`.
 
-```bash
-cd apps/ecs-sandbox && make check
-cd apps/dev-cli && make check
-cd packages/ecs-sandbox-client && make check
-```
+4. Report a summary of pass/fail status for each check.
 
-## Individual checks
+5. If any checks fail that cannot be auto-fixed, report what needs manual attention.
 
-```bash
-make fmt-check    # Black formatting
-make lint         # Ruff linting
-make types        # ty type checking
-make test         # pytest
-```
+This is the gate for all PRs — all checks must pass before merge.

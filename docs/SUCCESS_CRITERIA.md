@@ -1,8 +1,55 @@
 # Success Criteria
 
-CI gates that must pass before merge.
+Checks that must pass before code can be merged. This is the CI gate.
 
-## Python (all apps and packages)
+## Quick Check
+
+```bash
+make check
+# Runs fmt-check, lint, types, test across all projects
+```
+
+## Individual Checks
+
+### Build
+
+```bash
+make build
+# Builds all projects (hatchling for Python packages)
+```
+
+### Tests
+
+```bash
+make test
+# Runs pytest across all projects
+```
+
+### Linting
+
+```bash
+make lint
+# Runs Ruff across all projects
+```
+
+### Formatting
+
+```bash
+# Check formatting
+make fmt-check
+
+# Fix formatting
+make fmt
+```
+
+### Type Checking
+
+```bash
+make types
+# Runs ty across all projects
+```
+
+## Summary
 
 | Check | Command | Tool |
 |-------|---------|------|
@@ -18,18 +65,30 @@ CI gates that must pass before merge.
 |-------|---------|
 | Image build | `make docker-build` |
 
-## Infrastructure
+## Fixing Common Issues
 
-| Check | Command |
-|-------|---------|
-| Terraform plan | `make iac <stage> plan` |
-| Terraform validate | `terraform validate` (run within each env) |
+### Formatting Failures
 
-## Running All Checks
-
+Run the formatter and commit:
 ```bash
-# Run everything
-make check
-
-# This runs fmt-check, lint, types, and test across all PROJECTS
+make fmt
 ```
+
+### Lint Warnings
+
+Ruff errors are usually auto-fixable:
+```bash
+# Check what ruff would fix
+uv run ruff check --fix .
+```
+
+### Test Failures
+
+Run tests for a specific project:
+```bash
+make run-for PROJECT=apps/ecs-sandbox CMD=test
+```
+
+## Pre-commit
+
+No pre-commit hooks configured. Run `make check` manually before pushing.
