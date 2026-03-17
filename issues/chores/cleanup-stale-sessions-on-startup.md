@@ -1,6 +1,6 @@
 # Clean up stale sessions on server startup
 
-**Status:** Planned
+**Status:** Complete
 **Labels:** reliability, auto
 
 ## Objective

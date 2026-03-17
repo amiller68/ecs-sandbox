@@ -33,6 +33,15 @@ async def mark_stale_sessions(db: AsyncSession) -> int:
     return result.rowcount  # type: ignore[attr-defined]
 
 
+async def get_active_sessions(db: AsyncSession) -> list[dict]:
+    """Get all active sessions with container IDs."""
+    result = await db.execute(
+        sqlalchemy.text("SELECT id, container_id FROM sessions WHERE status = :active"),
+        {"active": SessionStatus.ACTIVE.value},
+    )
+    return [dict(row) for row in result.mappings().all()]
+
+
 async def get_stale_sessions(db: AsyncSession) -> list[dict]:
     """Get all stale sessions with container IDs."""
     result = await db.execute(

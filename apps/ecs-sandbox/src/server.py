@@ -10,8 +10,24 @@ from redis.asyncio import Redis
 from src.config import Config
 from src.db.connection import get_engine, get_session_factory, apply_migrations
 from src.middleware.auth import AuthMiddleware
+from src.services.cleanup import get_active_sessions, mark_destroyed
 from src.services.docker_manager import DockerManager
 from src.services.worker import SessionWorker
+
+
+async def _cleanup_stale_sessions(session_factory, docker: DockerManager) -> int:
+    """Mark any active sessions as destroyed and remove their containers.
+
+    After a server restart, old container IPs are stale and sessions are
+    unreachable. This cleans them up automatically on startup.
+    """
+    async with session_factory() as db:
+        sessions = await get_active_sessions(db)
+        for row in sessions:
+            if row["container_id"]:
+                await docker.remove_container(row["container_id"])
+            await mark_destroyed(db, row["id"])
+        return len(sessions)
 
 
 @asynccontextmanager
@@ -36,6 +52,10 @@ async def lifespan(app: FastAPI):
     await docker.connect()
     app.state.docker = docker
     print("Docker connected")
+
+    # Clean up stale sessions from previous run
+    cleaned = await _cleanup_stale_sessions(app.state.session_factory, docker)
+    print(f"Cleaned up {cleaned} stale session(s)")
 
     # Session worker
     worker = SessionWorker(app.state.session_factory)
