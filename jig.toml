@@ -7,10 +7,10 @@ copy = [".env"]
 # Spawn configuration
 [spawn]
 auto = true
+auto_spawn = true
 
 # Issues configuration
 [issues]
-auto_spawn = true
 spawn_labels = ["auto"]
 
 # Agent configuration
