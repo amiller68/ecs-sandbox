@@ -13,6 +13,7 @@
   let ws = null;
   let lineBuffer = "";
   let waiting = false; // true while a command is executing
+  let cwd = "/workspace";
 
   function setStatus(text, cls) {
     statusEl.textContent = text;
@@ -21,7 +22,7 @@
 
   function writePrompt() {
     waiting = false;
-    term.write("\r\n\x1b[32m$\x1b[0m ");
+    term.write("\r\n\x1b[34m" + cwd + "\x1b[0m \x1b[32m$\x1b[0m ");
   }
 
   function connect(sessionId, token) {
@@ -109,6 +110,7 @@
           writePrompt();
         }
       } else if (msg.type === "output") {
+        if (msg.cwd) cwd = msg.cwd;
         if (msg.stdout) term.write(msg.stdout);
         if (msg.stderr) term.write("\x1b[31m" + msg.stderr + "\x1b[0m");
         if (msg.exit_code !== undefined && msg.exit_code !== 0) {
