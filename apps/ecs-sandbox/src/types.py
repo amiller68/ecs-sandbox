@@ -87,6 +87,7 @@ class WsOutput:
     stderr: str = ""
     exit_code: int = 1
     duration_ms: int = 0
+    cwd: str = "/workspace"
 
     def to_msg(self) -> dict:
         return {
@@ -95,6 +96,7 @@ class WsOutput:
             "stderr": self.stderr,
             "exit_code": self.exit_code,
             "duration_ms": self.duration_ms,
+            "cwd": self.cwd,
         }
 
 
